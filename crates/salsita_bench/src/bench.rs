@@ -137,9 +137,9 @@ use crate::macros::Tuple100;
 use core::fmt::Debug;
 use core::iter;
 use salsita::Db;
-use salsita::event::PerfHandler;
+use salsita::handler::perf;
 use salsita::query::Query;
-use salsita::storage::DefaultStorage;
+use salsita::storage::default::Storage as DefaultStorage;
 use std::thread;
 
 #[derive(serde::Serialize)]
@@ -160,7 +160,7 @@ struct Scenario {
 
 /// Query/evaluation counts for a single run.
 ///
-/// All counts are recorded by [`PerfHandler`] instrumentation.
+/// All counts are recorded by [`perf::Handler`] instrumentation.
 #[derive(serde::Serialize)]
 struct Counts {
     /// *Every* `Db::query::<Q>` invocation that occurred during the run,
@@ -173,7 +173,7 @@ struct Counts {
 
 /// Timing measurements for a single run.
 ///
-/// All times are in **nanoseconds**, recorded by [`PerfHandler`] instrumentation.
+/// All times are in **nanoseconds**, recorded by [`perf::Handler`] instrumentation.
 #[derive(serde::Serialize)]
 struct Timings {
     /// Wall-clock time measured for the top-level `Db::query` call that the
@@ -1419,8 +1419,8 @@ fn bench_graph<
     const PARALLEL_SNAPSHOT_COUNT: usize,
     Sink,
 >(
-    alloc_inputs: impl Fn(&mut Db<DefaultStorage, PerfHandler>) -> (Sink::Args, Sink::Out),
-    update_inputs: impl Fn(&mut Db<DefaultStorage, PerfHandler>, &Sink::Args, bool) -> Sink::Out,
+    alloc_inputs: impl Fn(&mut Db<DefaultStorage, perf::Handler>) -> (Sink::Args, Sink::Out),
+    update_inputs: impl Fn(&mut Db<DefaultStorage, perf::Handler>, &Sink::Args, bool) -> Sink::Out,
 ) -> Vec<Scenario>
 where
     Sink: Query,
@@ -1438,7 +1438,7 @@ where
         |db, ()| {
             let (inputs, exp_out) = alloc_inputs(db);
             let out = db.snapshot().query::<Sink>(&inputs);
-            assert_eq!(*out, exp_out);
+            assert_eq!(*out, exp_out, "unexpected query output");
         },
     );
 
@@ -1457,7 +1457,7 @@ where
         },
         |db, (inputs, exp_out)| {
             let out = db.snapshot().query::<Sink>(&inputs);
-            assert_eq!(*out, exp_out);
+            assert_eq!(*out, exp_out, "unexpected query output");
         },
     );
 
@@ -1472,13 +1472,13 @@ where
         |db| {
             let (inputs, exp_out) = alloc_inputs(db);
             let out = db.snapshot().query::<Sink>(&inputs);
-            assert_eq!(*out, exp_out);
+            assert_eq!(*out, exp_out, "unexpected query output");
             inputs
         },
         |db, inputs| {
             let exp_out = update_inputs(db, &inputs, true);
             let out = db.snapshot().query::<Sink>(&inputs);
-            assert_eq!(*out, exp_out);
+            assert_eq!(*out, exp_out, "unexpected query output");
         },
     );
 
@@ -1492,7 +1492,7 @@ where
         |db| {
             let (inputs, exp_out) = alloc_inputs(db);
             let out = db.snapshot().query::<Sink>(&inputs);
-            assert_eq!(*out, exp_out);
+            assert_eq!(*out, exp_out, "unexpected query output");
             inputs
         },
         |db, inputs| {
@@ -1510,7 +1510,7 @@ where
                                 let snapshot = db.snapshot();
                                 move || {
                                     let out = snapshot.query::<Sink>(&inputs);
-                                    assert_eq!(*out, exp_out);
+                                    assert_eq!(*out, exp_out, "unexpected query output");
                                 }
                             })
                             .expect("failed to spawn thread")
@@ -1528,8 +1528,8 @@ where
 
 fn bench_scenario<const WARMUP_COUNT: usize, const N: usize, Inp>(
     name: &'static str,
-    init: impl Copy + Fn(&mut Db<DefaultStorage, PerfHandler>) -> Inp,
-    bench: impl Copy + Fn(&mut Db<DefaultStorage, PerfHandler>, Inp),
+    init: impl Copy + Fn(&mut Db<DefaultStorage, perf::Handler>) -> Inp,
+    bench: impl Copy + Fn(&mut Db<DefaultStorage, perf::Handler>, Inp),
 ) -> Scenario {
     let (_, counts) = bench_iter(init, bench);
     for _ in 0..WARMUP_COUNT {
@@ -1548,32 +1548,40 @@ fn bench_scenario<const WARMUP_COUNT: usize, const N: usize, Inp>(
     };
 
     fn bench_iter<T>(
-        init: impl Fn(&mut Db<DefaultStorage, PerfHandler>) -> T,
-        bench: impl Fn(&mut Db<DefaultStorage, PerfHandler>, T),
+        init: impl Fn(&mut Db<DefaultStorage, perf::Handler>) -> T,
+        bench: impl Fn(&mut Db<DefaultStorage, perf::Handler>, T),
     ) -> (Timings, Counts) {
         let mut db = Db::default();
-        let v = init(&mut db);
+        let value = init(&mut db);
         db.event_handler().reset();
-        bench(&mut db, v);
-        let m = db.event_handler();
-        (Timings::new(m), Counts::new(m))
+        bench(&mut db, value);
+        let measurements = db.event_handler();
+        (Timings::new(measurements), Counts::new(measurements))
     }
 }
 
 impl Counts {
-    fn new(m: &PerfHandler) -> Self {
+    fn new(measurements: &perf::Handler) -> Self {
         Self {
-            query: m.query_count(),
-            eval: m.eval_count(),
+            query: measurements.query_count(),
+            eval: measurements.eval_count(),
         }
     }
 }
 
 impl Timings {
-    fn new(m: &PerfHandler) -> Self {
+    fn new(measurements: &perf::Handler) -> Self {
         Self {
-            query: m.query_time().as_nanos().try_into().unwrap_or(u64::MAX),
-            eval: m.eval_time().as_nanos().try_into().unwrap_or(u64::MAX),
+            query: measurements
+                .query_time()
+                .as_nanos()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            eval: measurements
+                .eval_time()
+                .as_nanos()
+                .try_into()
+                .unwrap_or(u64::MAX),
         }
     }
 }

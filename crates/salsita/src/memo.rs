@@ -1,8 +1,8 @@
 use crate::INCONSISTENT_STATE;
 use crate::Revision;
-use crate::event;
-use crate::event::Event;
-use crate::event::EventKind;
+use crate::handler::Event;
+use crate::handler::EventKind;
+use crate::handler::Handler;
 use crate::query_ops::QueryId;
 use crate::storage::Storage;
 use core::fmt;
@@ -66,7 +66,7 @@ where
         value_id: S::Id,
     ) -> MemoId<S>
     where
-        H: event::Handler,
+        H: Handler,
     {
         let memo_id = MemoId { query_id, args_id };
         let mut entry = MemoEntry::new();
@@ -85,7 +85,7 @@ where
 
     pub(crate) fn memo_id<H>(&self, handler: &H, query_id: QueryId, args_id: S::Id) -> MemoId<S>
     where
-        H: event::Handler,
+        H: Handler,
     {
         let memo_id = MemoId { query_id, args_id };
         let did_insert = match self.0.write().expect(INCONSISTENT_STATE).entry(memo_id) {
