@@ -10,6 +10,4 @@
 !/clippy.toml
 !/.cargo/config.toml
 !/.github/workflows/pass-test-suite.yml
-!/salsita/src/**/*.rs
-!/salsita_bench/src/**/*.rs
-!/xtask/src/**/*.rs
+!/crates/*/src/**/*.rs
