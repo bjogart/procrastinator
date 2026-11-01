@@ -22,7 +22,7 @@ pub struct Handler {
 }
 
 #[derive(Debug, Default)]
-pub struct AtomicDuration {
+struct AtomicDuration {
     ns: AtomicU64,
 }
 
