@@ -1,8 +1,8 @@
 use crate::INCONSISTENT_STATE;
 use crate::Snapshot;
-use crate::event;
-use crate::event::Event;
-use crate::event::EventKind;
+use crate::handler::Event;
+use crate::handler::EventKind;
+use crate::handler::Handler;
 use crate::panic_expected_different_type;
 use crate::query::Query;
 use crate::storage::Handle as _;
@@ -43,7 +43,7 @@ where
 {
     pub(crate) fn query_id<Q>(&self, handler: &H) -> QueryId
     where
-        H: event::Handler,
+        H: Handler,
         Q: Query,
     {
         let Self(registry) = self;
@@ -65,7 +65,7 @@ where
 
     pub(crate) fn get(&self, query_id: QueryId) -> Option<QueryOps<S, H>>
     where
-        H: event::Handler,
+        H: Handler,
     {
         let Self(registry) = self;
         registry
@@ -77,7 +77,7 @@ where
 
     pub(crate) fn retain(&mut self, handler: &H, retain: impl Fn(QueryId) -> bool)
     where
-        H: event::Handler,
+        H: Handler,
     {
         let Self(registry) = self;
         let registry = registry.get_mut().expect(INCONSISTENT_STATE);
@@ -107,7 +107,7 @@ where
 {
     fn new<Q>() -> Self
     where
-        H: event::Handler,
+        H: Handler,
         Q: Query,
     {
         return Self {
@@ -118,7 +118,7 @@ where
         fn eval<S, H, Q>(snapshot: &Snapshot<S, H>, args: S::Handle) -> Box<dyn Any + Send + Sync>
         where
             S: Storage,
-            H: event::Handler,
+            H: Handler,
             Q: Query,
         {
             let args = args.downcast::<Q::Args>();
@@ -129,7 +129,7 @@ where
         fn store_output<S, H, T>(storage: &S, handler: &H, out: &(dyn Any + Send + Sync)) -> S::Id
         where
             S: Storage,
-            H: event::Handler,
+            H: Handler,
             T: Clone + Eq + Hash + Send + Sync + 'static,
         {
             let Some(out) = out.downcast_ref::<T>() else {

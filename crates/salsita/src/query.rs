@@ -1,5 +1,5 @@
 use crate::Snapshot;
-use crate::event;
+use crate::handler::Handler;
 use crate::memo::MemoId;
 use crate::storage::Storage;
 use crate::storage::Transfer as _;
@@ -17,7 +17,7 @@ pub trait Query: Send + Sync + 'static {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: event::Handler;
+        H: Handler;
 }
 
 pub trait Input: Send + Sync + 'static {
@@ -62,7 +62,7 @@ where
     fn eval<S, H>(_: &Snapshot<S, H>, _: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: event::Handler,
+        H: Handler,
     {
         panic!("Inputs should be defined through `Db::{{new,set}}_input()`, not evaluated")
     }

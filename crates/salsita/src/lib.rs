@@ -1,8 +1,9 @@
 extern crate alloc;
 
-use crate::event::Event;
-use crate::event::ScopedEvent;
-use crate::event::ScopedEventKind;
+use crate::handler::Event;
+use crate::handler::Handler;
+use crate::handler::ScopedEvent;
+use crate::handler::ScopedEventKind;
 use crate::memo::MemoId;
 use crate::memo::Memos;
 use crate::query::Input;
@@ -11,10 +12,10 @@ use crate::query::InputRegistry;
 use crate::query::Query;
 use crate::query_ops::QueryOpsRegistry;
 use crate::shared::Shared;
-use crate::storage::DefaultStorage;
 use crate::storage::Handle;
 use crate::storage::Storage;
 use crate::storage::Transfer as _;
+use crate::storage::default::Storage as DefaultStorage;
 use crate::update::PendingCommit;
 use crate::update::QueryUpdate;
 use core::any::type_name;
@@ -24,7 +25,7 @@ use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering;
 use std::collections::HashSet;
 
-pub mod event;
+pub mod handler;
 pub(crate) mod memo;
 pub mod query;
 mod query_ops;
@@ -109,7 +110,7 @@ where
 
     pub fn new_input<I>(&mut self, value: &I::Value) -> InputId<I>
     where
-        H: event::Handler,
+        H: Handler,
         I: Input,
     {
         let rev = self.runtime.rev.get();
@@ -129,7 +130,7 @@ where
 
     pub fn set_input<I>(&mut self, input_id: InputId<I>, value: &I::Value)
     where
-        H: event::Handler,
+        H: Handler,
         I: Input,
     {
         self.runtime.should_cancel.store(true, Ordering::Relaxed);
@@ -151,7 +152,7 @@ where
 
     pub fn gc(&mut self)
     where
-        H: event::Handler,
+        H: Handler,
     {
         self.runtime.wait_exclusive().gc(&mut self.inputs);
     }
@@ -188,7 +189,7 @@ where
 
     pub fn query<Q>(&self, args: &Q::Args) -> <S::Handle as Handle>::TypedHandle<Q::Out>
     where
-        H: event::Handler,
+        H: Handler,
         Q: Query,
     {
         let _query_guard = &self
@@ -211,7 +212,7 @@ where
 
     fn verify_memo(&self, current_rev: Revision, memo_id: MemoId<S>) -> MemoValue<S>
     where
-        H: event::Handler,
+        H: Handler,
     {
         let (last_verified, deps) = {
             let (last_verified, deps) = self.runtime.memos.verification(memo_id);
@@ -235,7 +236,7 @@ where
 
     fn eval_memo(&self, current_rev: Revision, memo_id: MemoId<S>) -> MemoValue<S>
     where
-        H: event::Handler,
+        H: Handler,
     {
         let ops = self
             .runtime
@@ -271,7 +272,7 @@ where
         dep: MemoId<S>,
     ) -> bool
     where
-        H: event::Handler,
+        H: Handler,
     {
         self.verify_memo(current_rev, dep);
         self.runtime.memos.last_changed(dep) > memo_last_verified
@@ -279,7 +280,7 @@ where
 
     fn install_query(&self) -> QueryUpdate<'_, S, H>
     where
-        H: event::Handler,
+        H: Handler,
     {
         let mut active_queries = self.active_queries.borrow_mut();
         let ActiveQueryStack(active_queries) = &mut *active_queries;
@@ -317,7 +318,7 @@ where
 {
     fn gc(&mut self, inputs: &mut InputRegistry<S>)
     where
-        H: event::Handler,
+        H: Handler,
     {
         let Self {
             storage,
@@ -349,7 +350,7 @@ where
             mem::replace(memos, next_memos)
         };
 
-        handler.event(Event::new(event::EventKind::DeregisterMemos(
+        handler.event(Event::new(handler::EventKind::DeregisterMemos(
             prev_memos.len().saturating_sub(memos.len()),
         )));
         query_ops.retain(handler, |query_id| input_queries.contains(&query_id));

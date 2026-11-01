@@ -6,7 +6,7 @@
 use core::hash::Hash;
 use core::marker::PhantomData;
 use salsita::Snapshot;
-use salsita::event;
+use salsita::handler::Handler;
 use salsita::query::Input;
 use salsita::query::Query;
 use salsita::storage::Storage;
@@ -32,7 +32,7 @@ macro_rules! impl_dep {
             fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
             where
                 S: Storage,
-                H: event::Handler,
+                H: Handler,
             {
                 let $input($($dep,)*) = args;
                 $(let $dep = snapshot.query::<$dep>($dep);)*
@@ -103,7 +103,7 @@ where
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: event::Handler,
+        H: Handler,
     {
         let dep = snapshot.query::<D>(args).clone();
         O::op(dep)
