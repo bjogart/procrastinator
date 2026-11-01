@@ -1,3 +1,4 @@
+#![cfg_attr(doc, doc = include_str!("../README.md"))]
 #![expect(
     clippy::print_stderr,
     reason = "`eprintln` is needed to communication with users"

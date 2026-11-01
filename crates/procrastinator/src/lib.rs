@@ -1,3 +1,5 @@
+#![cfg_attr(doc, doc = include_str!("../README.md"))]
+
 extern crate alloc;
 
 use crate::handler::Event;
