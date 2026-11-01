@@ -1,3 +1,7 @@
+//! The default [`Storage`](crate::storage::Storage) implementation.
+//!
+//! See [`Storage`] for details.
+
 use crate::INCONSISTENT_STATE;
 use crate::handler::Event;
 use crate::handler::EventKind;
@@ -17,12 +21,56 @@ use std::sync::RwLockReadGuard;
 use crate::storage::Storage as StorageTrait;
 use crate::storage::Transfer as TransferTrait;
 
+/// The default storage: deduplicated values behind [`Arc`]s.
+///
+/// Each distinct value is stored once, in an [`Arc`]. Values are told apart
+/// by type and by their [`Hash`] and [`Eq`] implementations, so storing a
+/// value equal to one that is already stored returns the existing
+/// [`StorageId`]. Query results are returned as <code>[Arc]&lt;T&gt;</code>,
+/// so reading a memoized output never clones it.
+///
+/// Values stay stored until [`Db::gc`](crate::Db::gc) drops the ones that
+/// are no longer needed.
+///
+/// # Examples
+///
+/// ```
+/// use procrastinator::Db;
+/// use procrastinator::query::Input;
+/// use procrastinator::storage::default;
+/// use std::sync::Arc;
+///
+/// struct Name;
+/// impl Input for Name {
+///     type Value = String;
+/// }
+///
+/// let mut db: Db<default::Storage> = Db::default();
+/// let name = db.new_input::<Name>(&"Ferris".to_owned());
+/// let handle: Arc<String> = db.snapshot().query::<Name>(&name);
+/// assert_eq!(*handle, "Ferris");
+/// ```
+///
+/// # Panics
+///
+/// A panic in the [`Clone`], [`Eq`], or [`Hash`] implementation of a value,
+/// or in the handler, propagates to the caller and leaves the storage
+/// unchanged. User code only runs outside of the write lock, so the lock is
+/// never poisoned.
 #[derive(Debug, Default)]
 pub struct Storage {
     hasher: RandomState,
     inner: RwLock<StorageInner>,
 }
 
+/// Copies selected values from a [`Storage`] into a new one.
+///
+/// Created by [`Storage::transfer`](crate::storage::Storage::transfer). It
+/// holds a read lock on the old storage until it is dropped or turned into
+/// the new storage with
+/// [`Transfer::into_storage`](crate::storage::Transfer::into_storage).
+/// See [`Storage::transfer`](crate::storage::Storage::transfer) for an
+/// example.
 #[derive(Debug)]
 pub struct Transfer<'storage> {
     curr: RwLockReadGuard<'storage, StorageInner>,
@@ -36,6 +84,11 @@ struct StorageInner {
     values: Vec<Arc<dyn Any + Send + Sync + 'static>>,
 }
 
+/// Identifies a value in a [`Storage`].
+///
+/// An ID is only meaningful for the storage that created it. After
+/// [`Db::gc`](crate::Db::gc), values live in a new storage under new IDs.
+/// See [`Storage::store`](crate::storage::Storage::store) for an example.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct StorageId(usize);
 
