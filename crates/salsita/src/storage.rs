@@ -210,20 +210,20 @@ fn index_entry_hash((hash, _): &(u64, DefaultStorageId)) -> u64 {
     *hash
 }
 
-fn eq_value<T>(a: &T, b: &dyn Any) -> bool
+fn eq_value<T>(v1: &T, v2: &dyn Any) -> bool
 where
     T: PartialEq + 'static,
 {
-    b.downcast_ref() == Some(a)
+    v2.downcast_ref() == Some(v1)
 }
 
-fn hash_value<T>(build_hasher: &RandomState, v: &T) -> u64
+fn hash_value<T>(build_hasher: &RandomState, value: &T) -> u64
 where
     T: Hash + 'static,
 {
     let mut hasher = build_hasher.build_hasher();
     TypeId::of::<T>().hash(&mut hasher);
-    v.hash(&mut hasher);
+    value.hash(&mut hasher);
     hasher.finish()
 }
 

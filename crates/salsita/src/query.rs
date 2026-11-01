@@ -72,13 +72,16 @@ impl<S> InputRegistry<S>
 where
     S: Storage,
 {
-    pub(crate) fn new_input<I>(&mut self, f: impl FnOnce(InputId<I>) -> MemoId<S>) -> InputId<I>
+    pub(crate) fn new_input<I>(
+        &mut self,
+        bootstrap_memo: impl FnOnce(InputId<I>) -> MemoId<S>,
+    ) -> InputId<I>
     where
         I: Input,
     {
         let Self(inputs) = self;
         let input_id = InputId(inputs.len(), PhantomData);
-        let memo_id = f(input_id);
+        let memo_id = bootstrap_memo(input_id);
         inputs.push(InputEntry {
             memo_id,
             transfer: transfer::<S, I>,

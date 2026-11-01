@@ -1552,28 +1552,36 @@ fn bench_scenario<const WARMUP_COUNT: usize, const N: usize, Inp>(
         bench: impl Fn(&mut Db<DefaultStorage, PerfHandler>, T),
     ) -> (Timings, Counts) {
         let mut db = Db::default();
-        let v = init(&mut db);
+        let value = init(&mut db);
         db.event_handler().reset();
-        bench(&mut db, v);
-        let m = db.event_handler();
-        (Timings::new(m), Counts::new(m))
+        bench(&mut db, value);
+        let measurements = db.event_handler();
+        (Timings::new(measurements), Counts::new(measurements))
     }
 }
 
 impl Counts {
-    fn new(m: &PerfHandler) -> Self {
+    fn new(measurements: &PerfHandler) -> Self {
         Self {
-            query: m.query_count(),
-            eval: m.eval_count(),
+            query: measurements.query_count(),
+            eval: measurements.eval_count(),
         }
     }
 }
 
 impl Timings {
-    fn new(m: &PerfHandler) -> Self {
+    fn new(measurements: &PerfHandler) -> Self {
         Self {
-            query: m.query_time().as_nanos().try_into().unwrap_or(u64::MAX),
-            eval: m.eval_time().as_nanos().try_into().unwrap_or(u64::MAX),
+            query: measurements
+                .query_time()
+                .as_nanos()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            eval: measurements
+                .eval_time()
+                .as_nanos()
+                .try_into()
+                .unwrap_or(u64::MAX),
         }
     }
 }

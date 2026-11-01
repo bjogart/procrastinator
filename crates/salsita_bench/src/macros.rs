@@ -105,8 +105,8 @@ where
         S: Storage,
         H: event::Handler,
     {
-        let d = snapshot.query::<D>(args).clone();
-        O::op(d)
+        let dep = snapshot.query::<D>(args).clone();
+        O::op(dep)
     }
 }
 
