@@ -16,8 +16,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Setup stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install
 
       - name: Setup taplo
         run: |

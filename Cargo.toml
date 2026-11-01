@@ -6,6 +6,7 @@ resolver = "3"
 authors = ["Jasper van den Bogart"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
+rust-version = "1.91.1"
 
 [workspace.dependencies]
 anyhow = { version = "1.0.104", default-features = false }
@@ -85,7 +86,6 @@ exhaustive_structs = "allow"
 expect_used = "allow"
 field_scoped_visibility_modifiers = "allow"
 implicit_return = "allow"
-inline_modules = "allow"
 items_after_statements = "allow"
 missing_docs_in_private_items = "allow"
 missing_inline_in_public_items = "allow"

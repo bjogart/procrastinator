@@ -4,10 +4,11 @@
 !/.gitignore
 
 !Cargo.toml
-!/LICENSE-APACHE
-!/LICENSE-MIT
 !/Cargo.lock
 !/clippy.toml
+!/LICENSE-APACHE
+!/LICENSE-MIT
+!/rust-toolchain.toml
 !/.cargo/config.toml
 !/.github/workflows/pass-test-suite.yml
 !/crates/*/src/**/*.rs
