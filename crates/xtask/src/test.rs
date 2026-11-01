@@ -10,10 +10,11 @@ impl flags::Test {
         cmd!(sh, "cargo test --workspace").run()?;
         cmd!(sh, "cargo clippy --workspace -- -D warnings").run()?;
         cmd!(sh, "cargo fmt --all --check").run()?;
-        cmd!(sh, "taplo fmt --check").run()?;
         if let Ok(out) = sh.cmd("rg").arg(r"[^\x{00}-\x{ff}\p{L}]").read() {
             return Err(anyhow!("Non-ASCII, non-Latin characters:\n{out}"));
         }
+        cmd!(sh, "cargo doc --workspace --no-deps").run()?;
+        cmd!(sh, "taplo fmt --check").run()?;
 
         Ok(())
     }
