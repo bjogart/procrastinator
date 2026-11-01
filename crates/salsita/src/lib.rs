@@ -34,7 +34,7 @@ pub mod storage;
 mod tests;
 mod update;
 
-pub const INCONSISTENT_STATE: &str = "bug: database in inconsistent state due to panic";
+pub(crate) const INCONSISTENT_STATE: &str = "bug: database in inconsistent state due to panic";
 
 #[derive(Debug)]
 pub struct Db<S = DefaultStorage, H = ()>
