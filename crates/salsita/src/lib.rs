@@ -305,7 +305,7 @@ where
     }
 
     #[must_use]
-    pub(crate) fn should_cancel(&self) -> bool {
+    pub fn should_cancel(&self) -> bool {
         // Cancellation does not end until all snapshots drop, so once a
         // snapshot sees `true` here, it will keep seeing true.
         self.runtime.should_cancel.load(Ordering::Relaxed)
