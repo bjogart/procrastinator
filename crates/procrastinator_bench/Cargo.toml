@@ -1,13 +1,13 @@
 [package]
-name = "salsita_bench"
-description = "Salsita's benchmark runner"
+name = "procrastinator_bench"
+description = "Procrastinator's benchmark runner"
 version = "0.0.0"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
 
 [dependencies]
-salsita.workspace = true
+procrastinator.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

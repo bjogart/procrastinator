@@ -5,11 +5,11 @@
 
 use core::hash::Hash;
 use core::marker::PhantomData;
-use salsita::Snapshot;
-use salsita::handler::Handler;
-use salsita::query::Input;
-use salsita::query::Query;
-use salsita::storage::Storage;
+use procrastinator::Snapshot;
+use procrastinator::handler::Handler;
+use procrastinator::query::Input;
+use procrastinator::query::Query;
+use procrastinator::storage::Storage;
 
 pub(crate) trait Op: Send + Sync + 'static {
     type Args: Clone + Eq + Hash + Send;

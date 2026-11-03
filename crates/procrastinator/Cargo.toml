@@ -1,5 +1,5 @@
 [package]
-name = "salsita"
+name = "procrastinator"
 version = "0.1.0"
 description = "A tiny crate for on-demand incremental computation"
 authors.workspace = true

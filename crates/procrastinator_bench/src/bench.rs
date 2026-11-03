@@ -136,10 +136,10 @@ use crate::macros::Tuple30;
 use crate::macros::Tuple100;
 use core::fmt::Debug;
 use core::iter;
-use salsita::Db;
-use salsita::handler::perf;
-use salsita::query::Query;
-use salsita::storage::default::Storage as DefaultStorage;
+use procrastinator::Db;
+use procrastinator::handler::perf;
+use procrastinator::query::Query;
+use procrastinator::storage::default::Storage as DefaultStorage;
 use std::thread;
 
 #[derive(serde::Serialize)]

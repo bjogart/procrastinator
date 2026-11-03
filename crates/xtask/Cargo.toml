@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Salsita's build scripts"
+description = "Procrastinator's build scripts"
 version = "0.0.0"
 authors.workspace = true
 license.workspace = true
