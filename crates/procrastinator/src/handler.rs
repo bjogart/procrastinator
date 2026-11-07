@@ -13,13 +13,6 @@ where
 
     fn event(&self, event: Event);
 
-    fn scoped_event(&self, event: ScopedEvent) -> ScopeGuard<'_, Self> {
-        ScopeGuard {
-            handler: self,
-            payload: Some(self.enter_scope(event)),
-        }
-    }
-
     fn enter_scope(&self, event: ScopedEvent) -> Self::Payload;
 
     fn exit_scope(&self, payload: Self::Payload);
@@ -54,7 +47,7 @@ pub enum ScopedEventKind {
 }
 
 #[derive(Debug)]
-pub struct ScopeGuard<'handler, H>
+pub(crate) struct ScopeGuard<'handler, H>
 where
     H: Handler,
 {
@@ -86,6 +79,18 @@ impl ScopedEvent {
         Self {
             thread_id: thread::current().id(),
             kind,
+        }
+    }
+}
+
+impl<'handler, H> ScopeGuard<'handler, H>
+where
+    H: Handler,
+{
+    pub(crate) fn new(handler: &'handler H, event: ScopedEvent) -> Self {
+        Self {
+            handler,
+            payload: Some(handler.enter_scope(event)),
         }
     }
 }
