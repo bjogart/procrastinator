@@ -14,6 +14,7 @@ use crate::handler::perf;
 use crate::query::Input;
 use crate::query::InputId;
 use crate::query::Query;
+use crate::query::cancel::Stale;
 use crate::storage::Storage;
 use crate::storage::default::Storage as DefaultStorage;
 use alloc::sync::Arc;
@@ -250,16 +251,51 @@ fn cancelled_eval_does_not_memoize_stale_deps() {
             while !snapshot.should_cancel() {
                 thread::yield_now();
             }
-            // `TotalPrice` is new and therefore evaluated, but its stale
+            // `StaleTotalPrice` is new and therefore evaluated, but its stale
             // dependency returns early due to cancellation.
-            snapshot.query::<TotalPrice>(&(price, count));
+            snapshot.query::<StaleTotalPrice>(&(price, count));
         }
     });
     // Setting an equal value triggers cancellation without bumping the
     // revision.
     db.set_input(price, &4);
     handle.join().unwrap();
-    assert_eq!(*db.snapshot().query::<TotalPrice>(&(price, count)), 6);
+    assert_eq!(*db.snapshot().query::<StaleTotalPrice>(&(price, count)), 6);
+}
+
+#[test]
+fn cancellation_policy_selects_current_or_stale_results() {
+    let mut db: Db = Db::default();
+    let price = db.new_input::<BurritoPrice>(&8);
+    // Verify `BurritoPriceWithShipping` once, then change its input so that it
+    // becomes stale.
+    assert_eq!(*db.snapshot().query::<BurritoPriceWithShipping>(&price), 10);
+    db.set_input(price, &4);
+    let handle = thread::spawn({
+        let snapshot = db.snapshot();
+        move || {
+            while !snapshot.should_cancel() {
+                thread::yield_now();
+            }
+            // The default `Fresh` policy evaluates against the current input.
+            // The result is not memoized, since cancellation is active.
+            assert_eq!(*snapshot.query::<BurritoPriceWithShipping>(&price), 6);
+            // The `Stale` policy returns the memo from the previous revision.
+            assert_eq!(
+                *snapshot.query_with::<BurritoPriceWithShipping, Stale>(&price),
+                10
+            );
+        }
+    });
+    // Setting an equal value triggers cancellation without bumping the
+    // revision.
+    db.set_input(price, &4);
+    handle.join().unwrap();
+    assert_eq!(
+        *db.snapshot()
+            .query_with::<BurritoPriceWithShipping, Stale>(&price),
+        6
+    );
 }
 
 #[test]
@@ -928,6 +964,22 @@ impl Query for TotalPrice {
     {
         let (price, count) = args;
         *snapshot.query::<BurritoPriceWithShipping>(price) * *snapshot.query::<BurritoCount>(count)
+    }
+}
+
+struct StaleTotalPrice;
+impl Query for StaleTotalPrice {
+    type Args = (InputId<BurritoPrice>, InputId<BurritoCount>);
+    type Out = usize;
+
+    fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
+    where
+        S: Storage,
+        H: Handler,
+    {
+        let (price, count) = args;
+        *snapshot.query_with::<BurritoPriceWithShipping, Stale>(price)
+            * *snapshot.query::<BurritoCount>(count)
     }
 }
 
