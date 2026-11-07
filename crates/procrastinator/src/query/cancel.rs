@@ -5,12 +5,13 @@
 //! [`Snapshot::should_cancel`] returns `true`. A cancellation policy decides
 //! how query calls behave in the meantime:
 //!
-//! - [`Fresh`] keeps evaluating queries as usual, so results stay up to date.
-//!   This is what [`Snapshot::query`] uses.
-//! - [`Stale`] returns memoized outputs without checking whether they are up
-//!   to date, which avoids evaluating queries whose results will soon be
-//!   discarded. This policy can potentially skip recursing into dependencies
-//!   but at the cost that returned results may be invalid.
+//! - [`cancel::Fresh`][Fresh] keeps evaluating queries as usual, so results
+//!   stay up to date. This is what [`Snapshot::query`] uses.
+//! - [`cancel::Stale`][Stale] returns memoized outputs without checking
+//!   whether they are up to date, which avoids evaluating queries whose
+//!   results will soon be discarded. This policy can potentially skip
+//!   recursing into dependencies but at the cost that returned results may be
+//!   invalid.
 //!
 //! Regardless of policy, users may choose to poll [`Snapshot::should_cancel`]
 //! inside [`Query::eval`] and abort evaluation early by returning a fallback
@@ -28,11 +29,8 @@
 //! use procrastinator::Db;
 //! use procrastinator::Snapshot;
 //! use procrastinator::handler::Handler;
-//! use procrastinator::query::Input;
-//! use procrastinator::query::InputId;
-//! use procrastinator::query::Query;
-//! use procrastinator::query::cancel::Stale;
 //! use procrastinator::storage::Storage;
+//! use procrastinator::query::Query;
 //!
 //! struct CancellableSum;
 //! impl Query for CancellableSum {
@@ -58,9 +56,9 @@
 //!
 //! let mut db: Db = Db::default();
 //! // This assertion will never cancel because cancellation is hard to test
-//! // without multiple threads any synchronization primitives, but
-//! // `CancellableSum` will poll `Snapshot::should_cancel` and exit early so new
-//! // inputs can propagate quickly.
+//! // without multiple threads and synchronization primitives, but
+//! // `CancellableSum` will poll `Snapshot::should_cancel` to exit quickly if
+//! // necessary, so inputs can propagate more quickly.
 //! assert_eq!(*db.snapshot().query::<CancellableSum>(&vec![1, 2, 3, 4]), Some(10));
 //! ```
 
@@ -86,7 +84,7 @@ pub(crate) mod sealed {
 /// ```
 /// use procrastinator::Db;
 /// use procrastinator::query::Input;
-/// use procrastinator::query::cancel::Fresh;
+/// use procrastinator::query::cancel;
 ///
 /// struct Width;
 /// impl Input for Width {
@@ -99,7 +97,7 @@ pub(crate) mod sealed {
 /// // These two calls are equivalent.
 /// let snapshot = db.snapshot();
 /// assert_eq!(
-///     *snapshot.query_with::<Width, Fresh>(&width),
+///     *snapshot.query_with::<Width, cancel::Fresh>(&width),
 ///     *snapshot.query::<Width>(&width),
 /// );
 /// ```
@@ -115,7 +113,8 @@ pub struct Fresh;
 /// based on outdated inputs. Only queries that were never evaluated before
 /// are evaluated, and their outputs are not memoized.
 ///
-/// Outside of cancellation, `Stale` behaves exactly like [`Fresh`].
+/// Outside of cancellation, `cancel::Stale` behaves exactly like
+/// [`cancel::Fresh`][Fresh].
 ///
 /// # Examples
 ///
@@ -126,7 +125,7 @@ pub struct Fresh;
 /// use procrastinator::query::Input;
 /// use procrastinator::query::InputId;
 /// use procrastinator::query::Query;
-/// use procrastinator::query::cancel::Stale;
+/// use procrastinator::query::cancel;
 /// use procrastinator::storage::Storage;
 /// use std::thread;
 ///
@@ -162,14 +161,14 @@ pub struct Fresh;
 ///         thread::yield_now();
 ///     }
 ///     let fresh = *snapshot.query::<Area>(&width);
-///     let stale = *snapshot.query_with::<Area, Stale>(&width);
+///     let stale = *snapshot.query_with::<Area, cancel::Stale>(&width);
 ///     (fresh, stale)
 /// });
 ///
 /// // Setting an equal value starts cancellation without changing anything.
 /// db.set_input(width, &4);
-/// // `Fresh` sees the current width of 4, while `Stale` returns the memoized
-/// // area for the previous width of 3.
+/// // `cancel::Fresh` sees the current width of 4, while `cancel::Stale`
+/// // returns the memoized area for the previous width of 3.
 /// assert_eq!(worker.join().unwrap(), (16, 9));
 /// ```
 #[derive(Clone, Copy, Debug)]

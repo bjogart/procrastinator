@@ -137,10 +137,10 @@ impl HandlerTrait for Handler {
 }
 
 impl Handler {
-    /// Reset metric accumulators.
+    /// Resets the accumulators to zero.
     ///
-    /// This function will reset counts and durations, but not global values,
-    /// like number of memos allocated.
+    /// Query and evaluation counts and times are reset. Gauges, like the
+    /// number of memos, are not.
     ///
     /// Note that, though individual counters are atomic, the reset touches
     /// multiple counters. Events emitted during a reset on a different thread

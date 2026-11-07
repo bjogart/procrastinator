@@ -14,7 +14,7 @@ use crate::handler::perf;
 use crate::query::Input;
 use crate::query::InputId;
 use crate::query::Query;
-use crate::query::cancel::Stale;
+use crate::query::cancel;
 use crate::storage::Storage;
 use crate::storage::default::Storage as DefaultStorage;
 use alloc::sync::Arc;
@@ -277,12 +277,13 @@ fn cancellation_policy_selects_current_or_stale_results() {
             while !snapshot.should_cancel() {
                 thread::yield_now();
             }
-            // The default `Fresh` policy evaluates against the current input.
-            // The result is not memoized, since cancellation is active.
+            // The default `cancel::Fresh` policy evaluates against the current
+            // input. The result is not memoized, since cancellation is active.
             assert_eq!(*snapshot.query::<BurritoPriceWithShipping>(&price), 6);
-            // The `Stale` policy returns the memo from the previous revision.
+            // The `cancel::Stale` policy returns the memo from the previous
+            // revision.
             assert_eq!(
-                *snapshot.query_with::<BurritoPriceWithShipping, Stale>(&price),
+                *snapshot.query_with::<BurritoPriceWithShipping, cancel::Stale>(&price),
                 10
             );
         }
@@ -293,7 +294,7 @@ fn cancellation_policy_selects_current_or_stale_results() {
     handle.join().unwrap();
     assert_eq!(
         *db.snapshot()
-            .query_with::<BurritoPriceWithShipping, Stale>(&price),
+            .query_with::<BurritoPriceWithShipping, cancel::Stale>(&price),
         6
     );
 }
@@ -978,7 +979,7 @@ impl Query for StaleTotalPrice {
         H: Handler,
     {
         let (price, count) = args;
-        *snapshot.query_with::<BurritoPriceWithShipping, Stale>(price)
+        *snapshot.query_with::<BurritoPriceWithShipping, cancel::Stale>(price)
             * *snapshot.query::<BurritoCount>(count)
     }
 }

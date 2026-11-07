@@ -184,9 +184,8 @@ where
     /// ends this scope. Every scope that is entered is exited exactly once,
     /// even if a query panics. Scopes on one thread are properly nested, so
     /// the most recently entered scope on a thread is always the first to
-    /// exit. Scopes
-    /// on different threads may interleave; use [`ScopedEvent::thread_id`] to
-    /// tell them apart.
+    /// exit. Scopes on different threads may interleave; use
+    /// [`ScopedEvent::thread_id`] to tell them apart.
     ///
     /// # Examples
     ///
