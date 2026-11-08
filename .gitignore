@@ -3,6 +3,11 @@
 
 !/.gitignore
 
+!/CLAUDE.md
+!/.claude/settings.json
+!/.claude/hooks/**/*
+!/.claude/skills/**/*
+
 !Cargo.toml
 !/Cargo.lock
 !/clippy.toml
