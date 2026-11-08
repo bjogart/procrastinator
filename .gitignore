@@ -18,5 +18,6 @@
 !/.cargo/config.toml
 !/.github/workflows/pass-test-suite.yml
 !/crates/*/README.md
+!/crates/*/LICENSE*
 !/crates/*/examples/**/*.rs
 !/crates/*/src/**/*.rs

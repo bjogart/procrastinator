@@ -2,9 +2,12 @@
 name = "procrastinator_bench"
 description = "Procrastinator's benchmark runner"
 version = "0.0.0"
+publish = false
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 procrastinator.workspace = true
