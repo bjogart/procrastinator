@@ -67,7 +67,7 @@ Every iteration starts from a fresh `Db`.
   multiple threads call the sink from their own snapshot.
   This measures how well query calls parallelize.
 
-Each scenario warms up before measuring a fixed numer of iterations.
+Each scenario warms up before measuring a fixed number of iterations.
 The query results are checked against the expected outputs in every iteration,
 so a benchmark run doubles as a correctness test.
 

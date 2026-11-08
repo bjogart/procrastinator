@@ -14,8 +14,8 @@ start with the [crate README](crates/procrastinator/README.md).
 
 ## Repository layout
 
-| Crate                                                 | Description                                                                      |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Crate                                                 | Description                                                                       |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------- |
 | [`procrastinator`](crates/procrastinator)             | The library itself.                                                               |
 | [`procrastinator_bench`](crates/procrastinator_bench) | Benchmarks that run synthetic query graphs and report counts and timings as JSON. |
 | [`xtask`](crates/xtask)                               | Development scripts, run with `cargo xtask`.                                      |
