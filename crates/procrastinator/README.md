@@ -314,7 +314,7 @@ Proposals are evaluated against the goals of this crate:
 
 - It stays small.
 - It stays accessible to users and contributors alike.
-- It uses no macros and no `unsafe` code.
+- It uses no macros in user-facing APIs and no `unsafe` code.
 - It uses no non-local control flow:
   for example, cancellation does not rely on panics or unwinding.
 
