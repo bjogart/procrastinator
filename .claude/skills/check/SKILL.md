@@ -8,11 +8,12 @@ Run `cargo xtask test` from the repo root. It runs, stopping at the first failur
 1. `cargo test --workspace --all-targets`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. `cargo fmt --all --check`
-4. `rg "[^\x{00}-\x{ff}\p{L}]"`: fails with "Non-ASCII, non-Latin characters" and lists the offending lines
+4. `cargo test --workspace --doc`
 5. `cargo doc --workspace --no-deps`: rustdoc lints are deny
-6. `taplo fmt --check`
+6. `rg "[^\x{00}-\x{ff}\p{L}]"`: fails with "Non-ASCII, non-Latin characters" and lists the offending lines
+7. `taplo fmt --check`
 
-Before running, check that `rg` and `taplo` are on PATH. If `rg` is missing, step 4 is silently skipped, so tell the user the character check did not run. If `taplo` is missing, step 6 fails with a spawn error rather than a formatting error.
+Before running, check that `rg` and `taplo` are on PATH. If `rg` is missing, step 6 fails with "rg failed with error" rather than a character report. If `taplo` is missing, step 7 fails with a spawn error rather than a formatting error.
 
 When a step fails:
 - Clippy: fix the code to satisfy the lint (the workspace enables the `restriction` group, so expect lints like `unwrap_used`, `arithmetic_side_effects`, `indexing_slicing`). Only fall back to `#[expect(lint, reason = "...")]` when the lint is genuinely wrong for that spot, and say so to the user. Never use `#[allow]` and never loosen `[workspace.lints]` without asking.

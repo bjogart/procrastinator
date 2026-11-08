@@ -250,8 +250,8 @@ Each concept in Procrastinator maps to a familiar construct from regular Rust:
   Implementing [`Input`] declares the type of its value.
   [`Db::new_input`] creates a new input and returns an [`InputId`], which queries take as an argument.
 - A **query** is like a pure function.
-  Implementing `Query` declares its argument and output types,
-  and `Query::eval` is its body.
+  Implementing [`Query`] declares its argument and output types,
+  and [`Query::eval`] is its body.
   Procrastinator assumes queries are pure.
   In other words, query results should depend only on their arguments and what they read through the snapshot.
 
@@ -274,6 +274,8 @@ Each concept in Procrastinator maps to a familiar construct from regular Rust:
 
 [`Input`]: https://docs.rs/procrastinator/latest/procrastinator/query/trait.Input.html
 [`InputId`]: https://docs.rs/procrastinator/latest/procrastinator/query/struct.InputId.html
+[`Query`]: https://docs.rs/procrastinator/latest/procrastinator/query/trait.Query.html
+[`Query::eval`]: https://docs.rs/procrastinator/latest/procrastinator/query/trait.Query.html#tymethod.eval
 [`Db`]: https://docs.rs/procrastinator/latest/procrastinator/struct.Db.html
 [`Db::new_input`]: https://docs.rs/procrastinator/latest/procrastinator/struct.Db.html#method.new_input
 [`Db::set_input`]: https://docs.rs/procrastinator/latest/procrastinator/struct.Db.html#method.set_input
@@ -314,7 +316,7 @@ Proposals are evaluated against the goals of this crate:
 
 - It stays small.
 - It stays accessible to users and contributors alike.
-- It uses no macros and no `unsafe` code.
+- It uses no macros in user-facing APIs and no `unsafe` code.
 - It uses no non-local control flow:
   for example, cancellation does not rely on panics or unwinding.
 

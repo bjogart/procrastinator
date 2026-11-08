@@ -13,7 +13,7 @@ use crate::query::Input;
 use crate::query::InputId;
 use crate::query::InputRegistry;
 use crate::query::Query;
-use crate::query::cancel::Fresh;
+use crate::query::cancel;
 use crate::query::cancel::sealed::CancellationPolicy;
 use crate::query_ops::QueryOpsRegistry;
 use crate::shared::Shared;
@@ -540,9 +540,9 @@ where
     ///
     /// # Cancellation
     ///
-    /// This method uses the [`Fresh`] cancellation policy: results are always
-    /// up to date, even while [`Snapshot::should_cancel`] returns `true`. Use
-    /// [`Snapshot::query_with`] to pick a different policy.
+    /// This method uses the [`cancel::Fresh`] cancellation policy: results are
+    /// always up to date, even while [`Snapshot::should_cancel`] returns
+    /// `true`. Use [`Snapshot::query_with`] to pick a different policy.
     ///
     /// # Panics
     ///
@@ -559,7 +559,7 @@ where
         H: Handler,
         Q: Query,
     {
-        self.query_with::<Q, Fresh>(args)
+        self.query_with::<Q, cancel::Fresh>(args)
     }
 
     /// Runs query `Q` with the given arguments under cancellation policy `P`,
@@ -569,18 +569,19 @@ where
     /// is cancelling, that is, while [`Snapshot::should_cancel`] returns
     /// `true`. The policy `P` decides what happens then:
     ///
-    /// - [`Fresh`] evaluates queries as usual, so results are up to date.
-    ///   [`Snapshot::query`] uses this policy.
-    /// - [`Stale`](query::cancel::Stale) returns any previously memoized
-    ///   output without checking whether it is still up to date. Only queries
-    ///   that have never been evaluated are evaluated. Results may therefore
-    ///   be based on outdated inputs.
+    /// - [`cancel::Fresh`] evaluates queries as usual, so results are up to
+    ///   date. [`Snapshot::query`] uses this policy.
+    /// - [`cancel::Stale`] returns any previously memoized output without
+    ///   checking whether it is still up to date. Only queries that have never
+    ///   been evaluated are evaluated. Results may therefore be based on
+    ///   outdated inputs.
     ///
-    /// Use [`Stale`](query::cancel::Stale) when an outdated answer is
-    /// acceptable and finishing quickly matters more, for example when a modified input makes a
-    /// running query's results obsolete.
+    /// Use [`cancel::Stale`] when an outdated answer is acceptable and
+    /// finishing quickly matters more, for example when a modified input
+    /// makes a running query's results obsolete.
     ///
-    /// Regardless of cancellation policy, outputs evaluated while cancelling are not memoized.
+    /// Regardless of cancellation policy, outputs evaluated while cancelling
+    /// are not memoized.
     ///
     /// # Panics
     ///
