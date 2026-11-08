@@ -4,6 +4,7 @@
 !/.gitignore
 
 !/CLAUDE.md
+!/README.md
 !/.claude/settings.json
 !/.claude/hooks/**/*
 !/.claude/skills/**/*
@@ -16,4 +17,6 @@
 !/rust-toolchain.toml
 !/.cargo/config.toml
 !/.github/workflows/pass-test-suite.yml
+!/crates/*/README.md
+!/crates/*/examples/**/*.rs
 !/crates/*/src/**/*.rs

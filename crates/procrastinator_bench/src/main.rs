@@ -1,3 +1,4 @@
+#![cfg_attr(doc, doc = include_str!("../README.md"))]
 #![expect(
     clippy::arithmetic_side_effects,
     reason = "Release profile (ie. wrapping) arithmetic is preferred so benchmarks represent Procrastinator performance instead of arithmetic performance."
