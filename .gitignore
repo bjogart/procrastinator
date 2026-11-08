@@ -15,6 +15,7 @@
 !/LICENSE-APACHE
 !/LICENSE-MIT
 !/rust-toolchain.toml
+!/.taplo.toml
 !/.cargo/config.toml
 !/.github/workflows/pass-test-suite.yml
 !/crates/*/README.md
