@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Lints and style
 
-- Lints are configured in `[workspace.lints]` in the root `Cargo.toml`: clippy `restriction`, `pedantic` and `cargo` groups are on and warnings are errors. So no `unwrap()`, no unchecked arithmetic (use `strict_add` etc.), no `print!`, no `unsafe`, `pub(crate)` instead of unreachable `pub`, every type implements `Debug`. Read the lint table before assuming something is allowed.
+- Lints are configured in `[workspace.lints]` in the root `Cargo.toml`: clippy `restriction`, `pedantic` and `cargo` groups are on and warnings are errors. So no `unwrap()`, no unchecked arithmetic (use `checked_add` etc.), no `print!`, no `unsafe`, `pub(crate)` instead of unreachable `pub`, every type implements `Debug`. Read the lint table before assuming something is allowed.
 - Suppress a lint only with `#[expect(lint, reason = "...")]`, never `#[allow]`.
 - Rustdoc lints are `deny`: intra-doc links must resolve, no bare URLs, no unescaped backticks.
 - Item order within a module is enforced by `clippy.toml` (`mod`, `use`, consts, types, traits, then impls/fns).
