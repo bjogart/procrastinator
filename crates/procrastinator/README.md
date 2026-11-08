@@ -19,7 +19,7 @@ Add Procrastinator to your project with:
 cargo add procrastinator
 ```
 
-The minimum supported Rust version is 1.91.1.
+The minimum supported Rust version is 1.85.1.
 
 ## Toy example
 

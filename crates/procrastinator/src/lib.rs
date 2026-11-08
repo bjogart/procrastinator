@@ -880,10 +880,8 @@ where
 
 impl GlobalRevision {
     fn bump(&mut self) -> Revision {
-        let Self {
-            rev: Revision { raw },
-        } = self;
-        *raw = raw.strict_add(1);
+        let Self { rev } = self;
+        *rev = rev.incr();
         self.get()
     }
 
@@ -896,15 +894,20 @@ impl GlobalRevision {
 impl Default for GlobalRevision {
     fn default() -> Self {
         Self {
-            rev: Revision {
-                raw: Revision::NEVER_VERIFIED.raw.strict_add(1),
-            },
+            rev: Revision::NEVER_VERIFIED.incr(),
         }
     }
 }
 
 impl Revision {
     const NEVER_VERIFIED: Self = Self { raw: 0 };
+
+    fn incr(self) -> Self {
+        match self.raw.checked_add(1) {
+            None => panic!("revision overflowed"),
+            Some(raw) => Self { raw },
+        }
+    }
 }
 
 pub(crate) fn panic_expected_different_type<T>() -> ! {

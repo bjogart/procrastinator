@@ -188,7 +188,6 @@ fn modifications_are_blocked_until_snapshots_drop() {
 }
 
 #[test]
-#[expect(clippy::mutex_atomic, reason = "Condvar requires mutex.")]
 fn modifications_trigger_query_cancellation() {
     let mut db: Db = Db::default();
     let worker_ready = Arc::new((Mutex::new(false), Condvar::new()));
