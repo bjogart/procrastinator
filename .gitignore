@@ -9,7 +9,7 @@
 !/.claude/hooks/**/*
 !/.claude/skills/**/*
 
-!Cargo.toml
+!/Cargo.toml
 !/Cargo.lock
 !/clippy.toml
 !/LICENSE-APACHE
@@ -18,7 +18,8 @@
 !/.taplo.toml
 !/.cargo/config.toml
 !/.github/workflows/pass-test-suite.yml
-!/crates/*/README.md
 !/crates/*/LICENSE*
+!/crates/*/README.md
+!/crates/*/Cargo.toml
 !/crates/*/examples/**/*.rs
 !/crates/*/src/**/*.rs
