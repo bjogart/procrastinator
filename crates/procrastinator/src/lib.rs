@@ -2,6 +2,7 @@ extern crate alloc;
 
 use crate::handler::Event;
 use crate::handler::Handler;
+use crate::handler::ScopeGuard;
 use crate::handler::ScopedEvent;
 use crate::handler::ScopedEventKind;
 use crate::memo::MemoId;
@@ -203,10 +204,10 @@ where
         Q: Query,
         P: CancellationPolicy,
     {
-        let _query_guard = &self
-            .runtime
-            .handler
-            .scoped_event(ScopedEvent::new(ScopedEventKind::Query));
+        let _query_guard = ScopeGuard::new(
+            &self.runtime.handler,
+            ScopedEvent::new(ScopedEventKind::Query),
+        );
         let query_id = self.runtime.query_ops.query_id::<Q>(&self.runtime.handler);
         let args_id = self.runtime.storage.store(&self.runtime.handler, args);
         let memo_id = self
@@ -265,10 +266,10 @@ where
         let args = self.runtime.storage.get(memo_id.args_id);
         let mut query_update = self.install_query();
         let out = {
-            let _eval_guard = &self
-                .runtime
-                .handler
-                .scoped_event(ScopedEvent::new(ScopedEventKind::Eval));
+            let _eval_guard = ScopeGuard::new(
+                &self.runtime.handler,
+                ScopedEvent::new(ScopedEventKind::Eval),
+            );
             (ops.eval)(self, args)
         };
         let out = (ops.store_output)(&self.runtime.storage, &self.runtime.handler, out.as_ref());
