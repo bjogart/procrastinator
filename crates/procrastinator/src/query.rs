@@ -10,6 +10,8 @@ use core::hash::Hash;
 use core::hash::Hasher;
 use core::marker::PhantomData;
 
+pub mod cancel;
+
 pub trait Query: Send + Sync + 'static {
     type Args: Clone + Eq + Hash + Send + Sync + 'static;
     type Out: Clone + Eq + Hash + Send + Sync + 'static;

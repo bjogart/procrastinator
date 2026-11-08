@@ -10,6 +10,8 @@ use crate::query::Input;
 use crate::query::InputId;
 use crate::query::InputRegistry;
 use crate::query::Query;
+use crate::query::cancel::Fresh;
+use crate::query::cancel::sealed::CancellationPolicy;
 use crate::query_ops::QueryOpsRegistry;
 use crate::shared::Shared;
 use crate::storage::Handle;
@@ -192,6 +194,15 @@ where
         H: Handler,
         Q: Query,
     {
+        self.query_with::<Q, Fresh>(args)
+    }
+
+    pub fn query_with<Q, P>(&self, args: &Q::Args) -> <S::Handle as Handle>::TypedHandle<Q::Out>
+    where
+        H: Handler,
+        Q: Query,
+        P: CancellationPolicy,
+    {
         let _query_guard = &self
             .runtime
             .handler
@@ -203,21 +214,27 @@ where
             .memos
             .memo_id(&self.runtime.handler, query_id, args_id);
         self.track_dep(memo_id);
-        let value_id = match self.verify_memo(self.runtime.rev.get(), memo_id) {
+        let value_id = match self.verify_memo::<P>(self.runtime.rev.get(), memo_id) {
             MemoValue::Memoized => self.memoized_value_id(memo_id),
             MemoValue::Uncommitted(value_id) => value_id,
         };
         Handle::downcast::<Q::Out>(self.runtime.storage.get(value_id))
     }
 
-    fn verify_memo(&self, current_rev: Revision, memo_id: MemoId<S>) -> MemoValue<S>
+    fn verify_memo<P>(&self, current_rev: Revision, memo_id: MemoId<S>) -> MemoValue<S>
     where
         H: Handler,
+        P: CancellationPolicy,
     {
         let (last_verified, deps) = {
             let (last_verified, deps) = self.runtime.memos.verification(memo_id);
+            // If this rev is up to date, skip it. Alternatively, if
+            // cancellation is active, the user indicated stale results are
+            // fine, and this memo has a value, then return early.
             if last_verified == current_rev
-                || self.should_cancel() && last_verified > Revision::NEVER_VERIFIED
+                || P::CAN_RETURN_STALE_RESULTS
+                    && self.should_cancel()
+                    && last_verified > Revision::NEVER_VERIFIED
             {
                 return MemoValue::Memoized;
             }
@@ -225,8 +242,10 @@ where
         };
         let deps_postdate_memo = deps
             .into_iter()
-            .any(|dep| self.dep_postdates_rev(current_rev, last_verified, dep));
-        if !deps_postdate_memo && last_verified > Revision::NEVER_VERIFIED && !self.should_cancel()
+            .any(|dep| self.dep_postdates_rev::<P>(current_rev, last_verified, dep));
+        if !deps_postdate_memo
+            && last_verified > Revision::NEVER_VERIFIED
+            && !(P::CAN_RETURN_STALE_RESULTS && self.should_cancel())
         {
             self.runtime.memos.mark_verified(memo_id, current_rev);
             return MemoValue::Memoized;
@@ -265,7 +284,7 @@ where
         MemoValue::Memoized
     }
 
-    fn dep_postdates_rev(
+    fn dep_postdates_rev<P>(
         &self,
         current_rev: Revision,
         memo_last_verified: Revision,
@@ -273,9 +292,12 @@ where
     ) -> bool
     where
         H: Handler,
+        P: CancellationPolicy,
     {
-        self.verify_memo(current_rev, dep);
-        self.runtime.memos.last_changed(dep) > memo_last_verified
+        match self.verify_memo::<P>(current_rev, dep) {
+            MemoValue::Uncommitted(_) => true,
+            MemoValue::Memoized => self.runtime.memos.last_changed(dep) > memo_last_verified,
+        }
     }
 
     fn install_query(&self) -> QueryUpdate<'_, S, H>
