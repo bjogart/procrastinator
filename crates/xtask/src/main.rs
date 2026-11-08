@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stderr,
+    reason = "`eprintln` is needed to communication with users"
+)]
+
 use xshell::Shell;
 
 mod bench;
