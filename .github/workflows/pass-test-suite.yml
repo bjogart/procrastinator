@@ -19,24 +19,52 @@ jobs:
       - name: Setup Rust toolchain from rust-toolchain.toml
         run: rustup toolchain install
 
-      - name: Setup taplo
+      - name: Setup taplo and ripgrep
+        env:
+          TAPLO_VERSION: "0.10.0"
+          RIPGREP_VERSION: "15.2.0"
         run: |
+          set -euo pipefail
           case "${{ runner.arch }}" in
-            "X86" | "X64")
-              RUNNER_ARCH="x86_64"
+            "X64")
+              TAPLO_SHA256="8fe196b894ccf9072f98d4e1013a180306e17d244830b03986ee5e8eabeb6156"
+              TAPLO_ASSET="taplo-linux-x86_64.gz"
+              RIPGREP_SHA256="33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c"
+              RIPGREP_TARGET="x86_64-unknown-linux-musl"
               ;;
             "ARM64")
-              RUNNER_ARCH="aarch64"
+              TAPLO_SHA256="033681d01eec8376c3fd38fa3703c79316f5e14bb013d859943b60a07bccdcc3"
+              TAPLO_ASSET="taplo-linux-aarch64.gz"
+              RIPGREP_SHA256="a740b91c82eaf9914cfedd353572f2791cbe0162c84101ee0951058f4dcbc90d"
+              RIPGREP_TARGET="aarch64-unknown-linux-gnu"
               ;;
             *)
-              echo "Unsupported architecture"
+              echo "Unsupported architecture: ${{ runner.arch }}"
               exit 1
               ;;
           esac
-          curl --location --silent "https://github.com/tamasfe/taplo/releases/latest/download/taplo-linux-${RUNNER_ARCH}.gz" | \
-            gzip --decompress > taplo && \
-            chmod +x taplo && \
-            sudo mv taplo "/usr/local/bin/taplo"
+
+          WORK_DIR="$(mktemp --directory)"
+          cd "${WORK_DIR}"
+
+          curl --fail --location --silent --show-error --output "${TAPLO_ASSET}" \
+            "https://github.com/tamasfe/taplo/releases/download/${TAPLO_VERSION}/${TAPLO_ASSET}"
+          echo "${TAPLO_SHA256}  ${TAPLO_ASSET}" | sha256sum --check --strict
+          gzip --decompress --stdout "${TAPLO_ASSET}" > taplo
+          sudo install --mode=0755 taplo /usr/local/bin/taplo
+
+          RIPGREP_NAME="ripgrep-${RIPGREP_VERSION}-${RIPGREP_TARGET}"
+          curl --fail --location --silent --show-error --output "${RIPGREP_NAME}.tar.gz" \
+            "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/${RIPGREP_NAME}.tar.gz"
+          echo "${RIPGREP_SHA256}  ${RIPGREP_NAME}.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "${RIPGREP_NAME}.tar.gz"
+          sudo install --mode=0755 "${RIPGREP_NAME}/rg" /usr/local/bin/rg
+
+      - name: Check tool versions
+        run: |
+          set -euo pipefail
+          taplo --version
+          rg --version
 
       - name: Run tests
         run: cargo xtask test
