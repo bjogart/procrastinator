@@ -58,8 +58,6 @@ use core::hash::Hash;
 use core::hash::Hasher;
 use core::marker::PhantomData;
 
-pub mod cancel;
-
 /// A memoized computation, like a pure function.
 ///
 /// A query declares its argument type, its output type, and how to compute

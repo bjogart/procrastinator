@@ -296,11 +296,10 @@ pub struct ScopedEvent {
 /// The kinds of [`ScopedEvent`].
 #[derive(Clone, Copy, Debug)]
 pub enum ScopedEventKind {
-    /// A call to [`Snapshot::query`](crate::Snapshot::query) or
-    /// [`Snapshot::query_with`](crate::Snapshot::query_with).
+    /// A call to [`Snapshot::query`](crate::Snapshot::query).
     ///
-    /// The scope covers the whole call: checking whether the memoized output
-    /// is up to date, and evaluating the query if it is not.
+    /// The scope covers the whole call: checking whether the memoized output is
+    /// up to date, and evaluating the query if it is not.
     Query,
     /// An evaluation of [`Query::eval`](crate::query::Query::eval).
     ///

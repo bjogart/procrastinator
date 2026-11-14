@@ -14,10 +14,8 @@ use crate::handler::perf;
 use crate::query::Input;
 use crate::query::InputId;
 use crate::query::Query;
-use crate::query::cancel;
 use crate::storage::Storage;
 use crate::storage::default::Storage as DefaultStorage;
-use alloc::sync::Arc;
 use core::cell::Cell;
 use core::fmt::Debug;
 use core::hash::Hash;
@@ -25,8 +23,6 @@ use core::hash::Hasher;
 use core::ops::Sub;
 use core::panic::AssertUnwindSafe;
 use std::panic;
-use std::sync::Condvar;
-use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread;
 
@@ -185,151 +181,6 @@ fn modifications_are_blocked_until_snapshots_drop() {
     db.set_input(price, &4);
     sender.send(db.snapshot()).unwrap();
     handle.join().unwrap();
-}
-
-#[test]
-fn modifications_trigger_query_cancellation() {
-    let mut db: Db = Db::default();
-    let worker_ready = Arc::new((Mutex::new(false), Condvar::new()));
-    let price = db.new_input::<BurritoPrice>(&8);
-    // Spawn a worker thread that holds a live snapshot. While this snapshot
-    // exists, calling `set_input()` in the main thread should block and trigger
-    // cancellation inside the worker thread.
-    let handle = thread::spawn({
-        let snapshot = db.snapshot();
-        let worker_ready = Arc::clone(&worker_ready);
-        move || {
-            // Sanity check: before any cancellation, the query evaluates as
-            // expected.
-            assert_eq!(*snapshot.query::<BurritoPriceWithShipping>(&price), (10));
-            // Notify the main thread that the worker is ready.
-            let (mutex, cvar) = &*worker_ready;
-            *mutex.lock().unwrap() = true;
-            cvar.notify_one();
-            // Wait for cancellation to be signalled, which is the signal that
-            // `set_input` is blocking.
-            while !snapshot.should_cancel() {
-                thread::yield_now();
-            }
-            // Calling a query while the database canceling automatically
-            // returns a memoized value and will not evaluate.
-            assert_eq!(*snapshot.query::<BurritoPriceWithShipping>(&price), (10));
-        }
-    });
-    // Wait until the worker is ready.
-    let (mutex, cvar) = &*worker_ready;
-    let mut guard = mutex.lock().unwrap();
-    while !*guard {
-        guard = cvar.wait(guard).unwrap();
-    }
-    // With the worker snapshot still alive, this call will: set the global
-    // cancellation flag and block until the worker snapshot is dropped.
-    db.set_input(price, &4);
-    // Now that the new value for `price` is set successfully, calling the same
-    // query will return an updated value.
-    assert_eq!(
-        *db.snapshot().query::<BurritoPriceWithShipping>(&price),
-        (6)
-    );
-    // Join and unwrap the worker thread to propagate failed assertions.
-    handle.join().unwrap();
-}
-
-#[test]
-fn cancelled_eval_does_not_memoize_stale_deps() {
-    let mut db: Db = Db::default();
-    let price = db.new_input::<BurritoPrice>(&8);
-    let count = db.new_input::<BurritoCount>(&1);
-    // Verify `BurritoPriceWithShipping` once, then change its input so that it
-    // becomes stale.
-    assert_eq!(*db.snapshot().query::<BurritoPriceWithShipping>(&price), 10);
-    db.set_input(price, &4);
-    let handle = thread::spawn({
-        let snapshot = db.snapshot();
-        move || {
-            while !snapshot.should_cancel() {
-                thread::yield_now();
-            }
-            // `StaleTotalPrice` is new and therefore evaluated, but its stale
-            // dependency returns early due to cancellation.
-            snapshot.query::<StaleTotalPrice>(&(price, count));
-        }
-    });
-    // Setting an equal value triggers cancellation without bumping the
-    // revision.
-    db.set_input(price, &4);
-    handle.join().unwrap();
-    assert_eq!(*db.snapshot().query::<StaleTotalPrice>(&(price, count)), 6);
-}
-
-#[test]
-fn cancellation_policy_selects_current_or_stale_results() {
-    let mut db: Db = Db::default();
-    let price = db.new_input::<BurritoPrice>(&8);
-    // Verify `BurritoPriceWithShipping` once, then change its input so that it
-    // becomes stale.
-    assert_eq!(*db.snapshot().query::<BurritoPriceWithShipping>(&price), 10);
-    db.set_input(price, &4);
-    let handle = thread::spawn({
-        let snapshot = db.snapshot();
-        move || {
-            while !snapshot.should_cancel() {
-                thread::yield_now();
-            }
-            // The default `cancel::Fresh` policy evaluates against the current
-            // input. The result is not memoized, since cancellation is active.
-            assert_eq!(*snapshot.query::<BurritoPriceWithShipping>(&price), 6);
-            // The `cancel::Stale` policy returns the memo from the previous
-            // revision.
-            assert_eq!(
-                *snapshot.query_with::<BurritoPriceWithShipping, cancel::Stale>(&price),
-                10
-            );
-        }
-    });
-    // Setting an equal value triggers cancellation without bumping the
-    // revision.
-    db.set_input(price, &4);
-    handle.join().unwrap();
-    assert_eq!(
-        *db.snapshot()
-            .query_with::<BurritoPriceWithShipping, cancel::Stale>(&price),
-        6
-    );
-}
-
-#[test]
-fn cancelled_dep_does_not_mark_caller_verified() {
-    let mut db: Db = Db::default();
-    let price = db.new_input::<BurritoPrice>(&8);
-    let count = db.new_input::<BurritoCount>(&1);
-    // Verify `StallingTotalPrice` once, then change its input so that it
-    // becomes stale.
-    assert_eq!(
-        *db.snapshot().query::<StallingTotalPrice>(&(price, count)),
-        10
-    );
-    db.set_input(price, &4);
-    let (sender, receiver) = mpsc::channel();
-    let handle = thread::spawn({
-        let snapshot = db.snapshot();
-        move || {
-            // `StallingTotalPrice` is not cancelled when its own memo is
-            // checked, but its dependency is re-evaluated during cancellation.
-            STALL_EVAL_UNTIL_CANCELLED.set(Some(sender));
-            snapshot.query::<StallingTotalPrice>(&(price, count));
-        }
-    });
-    // Wait until the worker is evaluating the dependency.
-    receiver.recv().unwrap();
-    // Setting an equal value triggers cancellation without bumping the
-    // revision.
-    db.set_input(price, &4);
-    handle.join().unwrap();
-    assert_eq!(
-        *db.snapshot().query::<StallingTotalPrice>(&(price, count)),
-        6
-    );
 }
 
 #[test]
@@ -967,22 +818,6 @@ impl Query for TotalPrice {
     }
 }
 
-struct StaleTotalPrice;
-impl Query for StaleTotalPrice {
-    type Args = (InputId<BurritoPrice>, InputId<BurritoCount>);
-    type Out = usize;
-
-    fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
-    where
-        S: Storage,
-        H: Handler,
-    {
-        let (price, count) = args;
-        *snapshot.query_with::<BurritoPriceWithShipping, cancel::Stale>(price)
-            * *snapshot.query::<BurritoCount>(count)
-    }
-}
-
 struct PriceWithVat;
 impl Query for PriceWithVat {
     type Args = (InputId<BurritoPrice>, InputId<BurritoCount>);
@@ -1168,44 +1003,5 @@ impl Clone for StallingClone {
             resume.recv().unwrap();
         }
         Self(self.0)
-    }
-}
-
-thread_local! {
-    static STALL_EVAL_UNTIL_CANCELLED: Cell<Option<mpsc::Sender<()>>> = const { Cell::new(None) };
-}
-
-struct StallingPriceWithShipping;
-impl Query for StallingPriceWithShipping {
-    type Args = InputId<BurritoPrice>;
-    type Out = usize;
-
-    fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
-    where
-        S: Storage,
-        H: Handler,
-    {
-        if let Some(sender) = STALL_EVAL_UNTIL_CANCELLED.take() {
-            sender.send(()).unwrap();
-            while !snapshot.should_cancel() {
-                thread::yield_now();
-            }
-        }
-        *snapshot.query::<BurritoPrice>(args) + 2
-    }
-}
-
-struct StallingTotalPrice;
-impl Query for StallingTotalPrice {
-    type Args = (InputId<BurritoPrice>, InputId<BurritoCount>);
-    type Out = usize;
-
-    fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
-    where
-        S: Storage,
-        H: Handler,
-    {
-        let (price, count) = args;
-        *snapshot.query::<StallingPriceWithShipping>(price) * *snapshot.query::<BurritoCount>(count)
     }
 }

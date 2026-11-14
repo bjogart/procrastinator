@@ -183,8 +183,7 @@ impl Handler {
 
     /// Returns the number of query calls since the last reset.
     ///
-    /// Every call to [`Snapshot::query`](crate::Snapshot::query) or
-    /// [`Snapshot::query_with`](crate::Snapshot::query_with) is counted,
+    /// Every call to [`Snapshot::query`](crate::Snapshot::query) is counted,
     /// including calls from inside other queries.
     pub fn query_count(&self) -> usize {
         self.query_count.load(Ordering::Relaxed)

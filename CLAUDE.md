@@ -39,9 +39,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Intentional design decisions (do not flag as bugs)
 
-- Cancellation must not panic or unwind (no Salsa-style `catch_unwind`). Returning `Option`/flags from every query was rejected for ergonomics. Cancellation is opt-in by calling `Snapshot::should_cancel`, with an additional option to abort query evaluation more quickly using `CancellationPolicy::stale`.
-- `gc()` does not trigger cancellation, because gc only empties caches and never changes query outputs. `set_input` does cancel.
 - Cyclic queries are bugs in query logic. If one occurs, a stack overflow should abort the process---as with regular infinite recursion.
 - Queries can be computed twice in parallel. Results will be equal so this is never incorrect, though evaluation may on occasion be duplicated.
-- `new_input` does not cancel or bump the revision, since new inputs cannot affect pre-existing memos.
+- `new_input` does not bump the revision, since new inputs cannot affect pre-existing memos.
 - Evaluate proposals against the crate's goals: small, accessible, no macros in user-facing APIs, no `unsafe`, no panic-based control flow.
