@@ -21,6 +21,7 @@ use crate::storage::Transfer as _;
 use crate::storage::default::Storage as DefaultStorage;
 use crate::update::PendingCommit;
 use crate::update::QueryUpdate;
+use core::any::TypeId;
 use core::any::type_name;
 use core::cell::RefCell;
 use core::mem;
@@ -195,6 +196,57 @@ where
     deps: Vec<MemoId<S>>,
 }
 
+/// An opaque value that uniquely identifies a query.
+///
+/// Within a single build, a query will always be assigned the same ID. IDs
+/// identify the query type and implement `Eq` and `Hash`. However, IDs are not
+/// guaranteed to be the same across builds.
+///
+/// # Examples
+///
+/// ```
+/// use procrastinator::handler::Handler;
+/// use procrastinator::query::Query;
+/// use procrastinator::QueryId;
+/// use procrastinator::Snapshot;
+/// use procrastinator::storage::Storage;
+///
+/// struct Shout;
+/// impl Query for Shout {
+///     type Args = String;
+///     type Out = String;
+///
+///     fn eval<S, H>(_snapshot: &Snapshot<S, H>, text: &Self::Args) -> Self::Out
+///     where
+///         S: Storage,
+///         H: Handler,
+///     {
+///         text.to_uppercase()
+///     }
+/// }
+///
+/// struct Whisper;
+/// impl Query for Whisper {
+///     type Args = String;
+///     type Out = String;
+///
+///     fn eval<S, H>(_snapshot: &Snapshot<S, H>, text: &Self::Args) -> Self::Out
+///     where
+///         S: Storage,
+///         H: Handler,
+///     {
+///         text.to_lowercase()
+///     }
+/// }
+///
+/// assert_eq!(QueryId::of::<Shout>(), QueryId::of::<Shout>());
+/// assert_eq!(QueryId::of::<Whisper>(), QueryId::of::<Whisper>());
+/// // Query IDs of different queries compare unequal.
+/// assert_ne!(QueryId::of::<Shout>(), QueryId::of::<Whisper>());
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct QueryId(TypeId);
+
 impl<S, H> Db<S, H>
 where
     S: Storage,
@@ -271,7 +323,10 @@ where
         I: Input,
     {
         let rev = self.runtime.rev.get();
-        let query_id = self.runtime.query_ops.query_id::<I>(&self.runtime.handler);
+        let query_id = QueryId::of::<I>();
+        self.runtime
+            .query_ops
+            .query_id::<I>(&self.runtime.handler, query_id);
         let value_id = self.runtime.storage.store(&self.runtime.handler, value);
         self.inputs.new_input(|input_id| {
             let dummy_args_id = self.runtime.storage.store(&self.runtime.handler, &input_id);
@@ -528,11 +583,14 @@ where
         H: Handler,
         Q: Query,
     {
+        let query_id = QueryId::of::<Q>();
         let _query_guard = ScopeGuard::new(
             &self.runtime.handler,
             ScopedEvent::new(ScopedEventKind::Query),
         );
-        let query_id = self.runtime.query_ops.query_id::<Q>(&self.runtime.handler);
+        self.runtime
+            .query_ops
+            .query_id::<Q>(&self.runtime.handler, query_id);
         let args_id = self.runtime.storage.store(&self.runtime.handler, args);
         let memo_id = self
             .runtime
@@ -570,12 +628,13 @@ where
     where
         H: Handler,
     {
+        let MemoId { query_id, args_id } = memo_id;
         let ops = self
             .runtime
             .query_ops
-            .get(memo_id.query_id)
+            .get(query_id)
             .expect("bug: query not registered");
-        let args = self.runtime.storage.get(memo_id.args_id);
+        let args = self.runtime.storage.get(args_id);
         let mut query_update = self.install_query();
         let out = {
             let _eval_guard = ScopeGuard::new(
@@ -709,6 +768,19 @@ where
         Self {
             deps: Vec::default(),
         }
+    }
+}
+
+impl QueryId {
+    /// Construct a new instance of the ID for a statically-known query.
+    ///
+    /// This is a constant-time operation.
+    #[must_use]
+    pub fn of<Q>() -> Self
+    where
+        Q: Query,
+    {
+        Self(TypeId::of::<Q>())
     }
 }
 

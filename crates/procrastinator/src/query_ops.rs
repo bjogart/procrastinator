@@ -1,4 +1,5 @@
 use crate::INCONSISTENT_STATE;
+use crate::QueryId;
 use crate::Snapshot;
 use crate::handler::Event;
 use crate::handler::EventKind;
@@ -8,7 +9,6 @@ use crate::query::Query;
 use crate::storage::Handle as _;
 use crate::storage::Storage;
 use core::any::Any;
-use core::any::TypeId;
 use core::hash::Hash;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -34,20 +34,16 @@ type Eval<S, H> =
 type StoreOut<S, H> =
     fn(storage: &S, handler: &H, value: &(dyn Any + Send + Sync)) -> <S as Storage>::Id;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct QueryId(TypeId);
-
 impl<S, H> QueryOpsRegistry<S, H>
 where
     S: Storage,
 {
-    pub(crate) fn query_id<Q>(&self, handler: &H) -> QueryId
+    pub(crate) fn query_id<Q>(&self, handler: &H, query_id: QueryId)
     where
         H: Handler,
         Q: Query,
     {
         let Self(registry) = self;
-        let query_id = QueryId(TypeId::of::<Q>());
         let did_insert = match registry.write().expect(INCONSISTENT_STATE).entry(query_id) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
@@ -60,7 +56,6 @@ where
         if did_insert {
             handler.event(Event::new(EventKind::RegisterQueryOps));
         }
-        query_id
     }
 
     pub(crate) fn get(&self, query_id: QueryId) -> Option<QueryOps<S, H>>

@@ -1,9 +1,9 @@
 use crate::INCONSISTENT_STATE;
+use crate::QueryId;
 use crate::Revision;
 use crate::handler::Event;
 use crate::handler::EventKind;
 use crate::handler::Handler;
-use crate::query_ops::QueryId;
 use crate::storage::Storage;
 use core::fmt;
 use core::fmt::Debug;
