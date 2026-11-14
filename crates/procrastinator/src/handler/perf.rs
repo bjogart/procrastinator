@@ -110,8 +110,9 @@ where
             EventKind::StoreValue(_) => {
                 self.stored_values.fetch_add(1, Ordering::Relaxed);
             }
-            EventKind::FreeValues(count) => {
-                self.stored_values.fetch_sub(count, Ordering::Relaxed);
+            EventKind::TransferValue { .. } => {}
+            EventKind::FreeValue(_) => {
+                self.stored_values.fetch_sub(1, Ordering::Relaxed);
             }
             EventKind::RegisterMemo => {
                 self.memo_count.fetch_add(1, Ordering::Relaxed);

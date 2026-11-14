@@ -20,6 +20,7 @@ use std::sync::RwLockReadGuard;
 
 use crate::storage::Storage as StorageTrait;
 use crate::storage::Transfer as TransferTrait;
+use std::collections::HashSet;
 
 /// The default storage: deduplicated values behind [`Arc`]s.
 ///
@@ -76,6 +77,7 @@ pub struct Transfer<'storage> {
     curr: RwLockReadGuard<'storage, StorageInner>,
     hasher: RandomState,
     next: StorageInner,
+    transferred_ids: HashSet<StorageId>,
 }
 
 #[derive(Debug, Default)]
@@ -150,6 +152,7 @@ impl StorageTrait for Storage {
             curr: self.inner.read().expect(INCONSISTENT_STATE),
             hasher: self.hasher.clone(),
             next: StorageInner::default(),
+            transferred_ids: HashSet::default(),
         }
     }
 }
@@ -157,14 +160,16 @@ impl StorageTrait for Storage {
 impl TransferTrait for Transfer<'_> {
     type Storage = Storage;
 
-    fn transfer<T>(
+    fn transfer<H, T>(
         &mut self,
-        id: <Self::Storage as StorageTrait>::Id,
+        handler: &H,
+        curr_id: <Self::Storage as StorageTrait>::Id,
     ) -> <Self::Storage as StorageTrait>::Id
     where
+        H: Handler<Self::Storage>,
         T: Clone + Eq + Hash + Send + Sync + 'static,
     {
-        let shared = self.curr.handle(id);
+        let shared = self.curr.handle(curr_id);
         let Some(value) = shared.downcast_ref::<T>() else {
             panic_expected_different_type::<T>()
         };
@@ -172,22 +177,35 @@ impl TransferTrait for Transfer<'_> {
         if let Some(id) = self.next.storage_id(hash, value) {
             return id;
         }
-        self.next.store_value(hash, Arc::clone(shared))
+        let next_id = self.next.store_value(hash, Arc::clone(shared));
+        self.transferred_ids.insert(curr_id);
+        // `handler.event` could panic, but we only hold a read lock on the
+        // current storage, which cannot be poisoned.
+        handler.event(Event::new(EventKind::TransferValue {
+            from: curr_id,
+            to: next_id,
+        }));
+        next_id
     }
 
     fn into_storage<H>(self, handler: &H) -> Self::Storage
     where
         H: Handler<Self::Storage>,
     {
-        let freed_values = self
-            .curr
-            .values
-            .len()
-            .saturating_sub(self.next.values.len());
-        handler.event(Event::new(EventKind::FreeValues(freed_values)));
+        let Self {
+            curr,
+            hasher,
+            next,
+            transferred_ids,
+        } = self;
+        for curr_id in curr.ids() {
+            if !transferred_ids.contains(&curr_id) {
+                handler.event(Event::new(EventKind::FreeValue(curr_id)));
+            }
+        }
         Storage {
-            hasher: self.hasher,
-            inner: RwLock::new(self.next),
+            hasher,
+            inner: RwLock::new(next),
         }
     }
 }
@@ -215,6 +233,10 @@ impl StorageInner {
         self.values
             .get(id.idx())
             .expect("bug: unknown storage ID (was this ID created by another database?)")
+    }
+
+    fn ids(&self) -> impl Iterator<Item = StorageId> {
+        (0..self.len()).map(StorageId)
     }
 
     fn len(&self) -> usize {

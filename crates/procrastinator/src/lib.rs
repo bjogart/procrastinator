@@ -103,9 +103,10 @@ pub(crate) const INCONSISTENT_STATE: &str = "bug: database in inconsistent state
 pub struct Db<S = DefaultStorage, H = ()>
 where
     S: Storage,
+    H: Handler<S>,
 {
     runtime: Shared<Runtime<S, H>>,
-    inputs: InputRegistry<S>,
+    inputs: InputRegistry<S, H>,
 }
 
 /// A read-only view of a [`Db`], used to run queries.
@@ -250,6 +251,7 @@ pub struct QueryId(TypeId);
 impl<S, H> Db<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     /// Returns the event handler of this database.
     ///
@@ -462,7 +464,7 @@ where
 impl<S, H> Default for Db<S, H>
 where
     S: Storage,
-    H: Default,
+    H: Handler<S>,
 {
     fn default() -> Self {
         Self {
@@ -695,7 +697,7 @@ impl<S, H> Runtime<S, H>
 where
     S: Storage,
 {
-    fn gc(&mut self, inputs: &mut InputRegistry<S>)
+    fn gc(&mut self, inputs: &mut InputRegistry<S, H>)
     where
         H: Handler<S>,
     {
@@ -714,7 +716,7 @@ where
             let memo_id = input.memo_id();
             input_queries.insert(memo_id.query_id);
             memos_transfer.retain(memo_id, |value_id| {
-                input.transfer(&mut storage_transfer, value_id)
+                input.transfer(handler, &mut storage_transfer, value_id)
             })
         });
         let next_memos = memos_transfer.into_memos();
@@ -738,7 +740,7 @@ where
 impl<S, H> Default for Runtime<S, H>
 where
     S: Storage,
-    H: Default,
+    H: Handler<S>,
 {
     fn default() -> Self {
         Self {

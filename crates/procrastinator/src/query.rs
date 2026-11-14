@@ -246,25 +246,29 @@ pub trait Input: Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub(crate) struct InputRegistry<S>(Vec<InputEntry<S>>)
-where
-    S: Storage;
-
-#[derive(Debug)]
-struct InputEntry<S>
+pub(crate) struct InputRegistry<S, H>(Vec<InputEntry<S, H>>)
 where
     S: Storage,
+    H: Handler<S>;
+
+#[derive(Debug)]
+struct InputEntry<S, H>
+where
+    S: Storage,
+    H: Handler<S>,
 {
     memo_id: MemoId<S>,
-    transfer: TransferInput<S>,
+    transfer: TransferInput<S, H>,
 }
 
 #[derive(Debug)]
-pub(crate) struct InputTransfer<'entry, S>(&'entry InputEntry<S>)
+pub(crate) struct InputTransfer<'entry, S, H>(&'entry InputEntry<S, H>)
 where
-    S: Storage;
+    S: Storage,
+    H: Handler<S>;
 
-type TransferInput<S> = fn(
+type TransferInput<S, H> = fn(
+    handler: &H,
     transfer: &mut <S as Storage>::Transfer<'_>,
     curr_args_id: <S as Storage>::Id,
     curr_value_id: <S as Storage>::Id,
@@ -342,9 +346,10 @@ where
     }
 }
 
-impl<S> InputRegistry<S>
+impl<S, H> InputRegistry<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     pub(crate) fn new_input<I>(
         &mut self,
@@ -358,21 +363,23 @@ where
         let memo_id = bootstrap_memo(input_id);
         inputs.push(InputEntry {
             memo_id,
-            transfer: transfer::<S, I>,
+            transfer: transfer::<S, H, I>,
         });
         return input_id;
 
-        fn transfer<S, I>(
+        fn transfer<S, H, I>(
+            handler: &H,
             transfer: &mut <S as Storage>::Transfer<'_>,
             curr_args_id: <S as Storage>::Id,
             curr_value_id: <S as Storage>::Id,
         ) -> (<S as Storage>::Id, <S as Storage>::Id)
         where
             S: Storage,
+            H: Handler<S>,
             I: Input,
         {
-            let next_args_id = transfer.transfer::<InputId<I>>(curr_args_id);
-            let next_value_id = transfer.transfer::<<I as Query>::Out>(curr_value_id);
+            let next_args_id = transfer.transfer::<H, InputId<I>>(handler, curr_args_id);
+            let next_value_id = transfer.transfer::<H, <I as Query>::Out>(handler, curr_value_id);
             (next_args_id, next_value_id)
         }
     }
@@ -391,7 +398,7 @@ where
 
     pub(crate) fn transfer(
         &self,
-        mut transfer: impl FnMut(InputTransfer<'_, S>) -> MemoId<S>,
+        mut transfer: impl FnMut(InputTransfer<'_, S, H>) -> MemoId<S>,
     ) -> Self {
         let next = self
             .0
@@ -405,9 +412,10 @@ where
     }
 }
 
-impl<S> InputTransfer<'_, S>
+impl<S, H> InputTransfer<'_, S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     pub(crate) fn memo_id(&self) -> MemoId<S> {
         self.0.memo_id
@@ -415,6 +423,7 @@ where
 
     pub(crate) fn transfer(
         &self,
+        handler: &H,
         storage_transfer: &mut S::Transfer<'_>,
         value_id: S::Id,
     ) -> (MemoId<S>, S::Id) {
@@ -422,7 +431,8 @@ where
             memo_id: MemoId { query_id, args_id },
             transfer: transfer_input,
         }) = self;
-        let (next_args_id, next_value_id) = transfer_input(storage_transfer, *args_id, value_id);
+        let (next_args_id, next_value_id) =
+            transfer_input(handler, storage_transfer, *args_id, value_id);
         let next_memo_id = MemoId {
             query_id: *query_id,
             args_id: next_args_id,
@@ -431,9 +441,10 @@ where
     }
 }
 
-impl<S> Default for InputRegistry<S>
+impl<S, H> Default for InputRegistry<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn default() -> Self {
         Self(Vec::default())

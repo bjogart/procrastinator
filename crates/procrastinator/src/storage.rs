@@ -54,13 +54,13 @@ pub mod default;
 
 /// A store of type-erased values, each identified by an ID.
 ///
-/// The database stores every query argument, query output, and input value
-/// with [`Storage::store`], and reads values back with [`Storage::get`].
-/// During [`Db::gc`](crate::Db::gc), it copies the values it still needs into
-/// a new storage with [`Storage::transfer`].
+/// The database stores every query argument, query output, and input value with
+/// [`Storage::store`], and reads values back with [`Storage::get`]. During
+/// [`Db::gc`](crate::Db::gc), it copies the values it still needs into a new
+/// storage with [`Storage::transfer`].
 ///
-/// Most programs use [`default::Storage`]. Its source is a good starting
-/// point for a custom implementation.
+/// Most programs use [`default::Storage`]. Its source is a good starting point
+/// for a custom implementation.
 ///
 /// # Examples
 ///
@@ -90,28 +90,25 @@ pub mod default;
 ///
 /// All methods take `&self`, and [`Storage::store`] and [`Storage::get`] are
 /// called from several threads at once, so implementations must synchronize
-/// internally. To send a [`Snapshot`](crate::Snapshot) to another thread,
-/// the storage must be [`Send`] and [`Sync`].
+/// internally. To send a [`Snapshot`](crate::Snapshot) to another thread, the
+/// storage must be [`Send`] and [`Sync`].
 ///
-/// To keep [`perf::Handler`](crate::handler::perf::Handler) accurate, emit
+/// To keep event handling accurate, emit
 /// [`EventKind::StoreValue`](crate::handler::EventKind::StoreValue) for each
-/// value that is actually added, and
-/// [`EventKind::FreeValues`](crate::handler::EventKind::FreeValues) from
-/// [`Transfer::into_storage`].
+/// value that is actually added.
 ///
 /// # Panic safety
 ///
-/// [`Storage::store`] and [`Transfer::transfer`] call user code: the
-/// [`Clone`], [`Eq`], and [`Hash`] implementations of stored values, and
-/// [`Handler::event`]. Any of these may panic. A storage must remain
-/// consistent when that happens, which in practice means:
+/// [`Storage::store`] and [`Transfer::transfer`] call user code: the [`Clone`],
+/// [`Eq`], and [`Hash`] implementations of stored values, and
+/// [`Handler::event`]. Any of these may panic. A storage must remain consistent
+/// when that happens, which in practice means:
 ///
-/// - Do not call user code while holding a lock that a panic would poison,
-///   such as a write lock. The database treats a poisoned lock as a bug and
-///   panics on every later access.
-/// - Do not call user code halfway through a modification. Clone a value
-///   before inserting it, and compare and hash it before or after, not
-///   during.
+/// - Do not call user code while holding a lock that a panic would poison, such
+///   as a write lock. The database treats a poisoned lock as a bug and panics
+///   on every later access.
+/// - Do not call user code halfway through a modification. Clone a value before
+///   inserting it, and compare and hash it before or after, not during.
 /// - Emit handler events after all locks are released.
 pub trait Storage: Default + 'static {
     /// Identifies a stored value.
@@ -207,7 +204,7 @@ pub trait Storage: Default + 'static {
     ///
     /// let mut transfer = storage.transfer();
     /// // IDs are not preserved: use the returned ID with the new storage.
-    /// let kept = transfer.transfer::<u32>(keep);
+    /// let kept = transfer.transfer::<(), u32>(&(), keep);
     /// let new_storage = transfer.into_storage(&());
     /// assert_eq!(*Handle::downcast::<u32>(new_storage.get(kept)), 1);
     /// ```
@@ -236,17 +233,29 @@ pub trait Transfer {
     /// # Panics
     ///
     /// May panic if `id` was not returned by the old storage, or if its value
-    /// is not of type `T`. Also panics if the [`Eq`] or [`Hash`]
-    /// implementation of `T` panics. In that case the old storage must be left
-    /// unchanged.
-    fn transfer<T>(&mut self, id: <Self::Storage as Storage>::Id) -> <Self::Storage as Storage>::Id
+    /// is not of type `T`. Also panics if the [`Eq`] or [`Hash`] implementation
+    /// of `T` panics. In that case the old storage must be left unchanged.
+    ///
+    /// # Implementing `transfer`
+    ///
+    /// This function copies the value referenced by `curr_id` to a new ID in
+    /// the new storage. If user code panics, the new storage will be dropped
+    /// and the old storage retained, so `curr_id` should remain a valid index
+    /// into the old storage. If a value is transferred succesfully, emit an
+    /// [`EventKind::TransferValue`](crate::handler::EventKind::TransferValue).
+    fn transfer<H, T>(
+        &mut self,
+        handler: &H,
+        curr_id: <Self::Storage as Storage>::Id,
+    ) -> <Self::Storage as Storage>::Id
     where
+        H: Handler<Self::Storage>,
         T: Clone + Eq + Hash + Send + Sync + 'static;
 
     /// Finishes the transfer and returns the new storage.
     ///
-    /// Emit [`EventKind::FreeValues`](crate::handler::EventKind::FreeValues)
-    /// on `handler` with the number of values that were not transferred.
+    /// Emit [`EventKind::FreeValue`](crate::handler::EventKind::FreeValue) on
+    /// `handler` for every value that was not transferred.
     fn into_storage<H>(self, handler: &H) -> Self::Storage
     where
         H: Handler<Self::Storage>;

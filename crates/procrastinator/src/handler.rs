@@ -117,7 +117,7 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 /// panic in a query unwinds, and panicking there aborts the process.
 pub trait Handler<S>
 where
-    Self: Sized,
+    Self: Sized + Default,
     S: Storage,
 {
     /// Data carried from the start of a scope to its end.
@@ -291,8 +291,16 @@ where
     /// distinct value only once, so storing a value equal to one that is
     /// already stored does not trigger this event.
     StoreValue(S::Id),
-    /// [`Db::gc`](crate::Db::gc) freed this many stored values.
-    FreeValues(usize),
+    /// A value was transferred to a new storage ID by
+    /// [`Db::gc`](crate::Db::gc).
+    TransferValue {
+        /// The ID that formerly referred to this value.
+        from: S::Id,
+        /// The ID that currently refers to this value.
+        to: S::Id,
+    },
+    /// A value was freed by [`Db::gc`](crate::Db::gc).
+    FreeValue(S::Id),
     /// A memo was created.
     ///
     /// A memo holds the memoized output of one query for one set of
