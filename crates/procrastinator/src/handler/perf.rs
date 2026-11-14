@@ -97,10 +97,10 @@ impl HandlerTrait for Handler {
 
     fn event(&self, event: Event) {
         match event.kind {
-            EventKind::RegisterQueryOps => {
+            EventKind::RegisterQueryOps(_) => {
                 self.registered_query_ops.fetch_add(1, Ordering::Relaxed);
             }
-            EventKind::DeregisterQueryOps => {
+            EventKind::DeregisterQueryOps(_) => {
                 self.registered_query_ops.fetch_sub(1, Ordering::Relaxed);
             }
             EventKind::StoreValue => {

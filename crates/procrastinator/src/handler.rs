@@ -29,6 +29,7 @@
 //! assert_eq!(db.event_handler().query_count(), 1);
 //! ```
 
+use crate::QueryId;
 use std::thread;
 use std::thread::ThreadId;
 
@@ -258,11 +259,11 @@ pub enum EventKind {
     ///
     /// This happens the first time a query or input type is used, and again
     /// if it is used after [`Db::gc`](crate::Db::gc) deregistered it.
-    RegisterQueryOps,
+    RegisterQueryOps(QueryId),
     /// [`Db::gc`](crate::Db::gc) deregistered a query type.
     ///
     /// Garbage collection keeps only the registrations of input types.
-    DeregisterQueryOps,
+    DeregisterQueryOps(QueryId),
     /// A value was stored.
     ///
     /// Values include query arguments, query outputs, and input values. The

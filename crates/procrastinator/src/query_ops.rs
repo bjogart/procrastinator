@@ -54,7 +54,7 @@ where
         // Database insertion must be finished before the handler is
         // notified as the handler may panic and poison the registry lock.
         if did_insert {
-            handler.event(Event::new(EventKind::RegisterQueryOps));
+            handler.event(Event::new(EventKind::RegisterQueryOps(QueryId::of::<Q>())));
         }
     }
 
@@ -79,7 +79,7 @@ where
         registry.retain(|query_id, _| {
             let kept = retain(*query_id);
             if !kept {
-                handler.event(Event::new(EventKind::DeregisterQueryOps));
+                handler.event(Event::new(EventKind::DeregisterQueryOps(*query_id)));
             }
             kept
         });
