@@ -332,7 +332,9 @@ impl Handler for () {
 }
 
 impl Event {
-    pub(crate) fn new(kind: EventKind) -> Self {
+    /// Constructs a new event.
+    #[must_use]
+    pub fn new(kind: EventKind) -> Self {
         Self {
             thread_id: thread::current().id(),
             kind,
@@ -341,7 +343,9 @@ impl Event {
 }
 
 impl ScopedEvent {
-    pub(crate) fn new(kind: ScopedEventKind) -> Self {
+    /// Constructs a new scoped event.
+    #[must_use]
+    pub fn new(kind: ScopedEventKind) -> Self {
         Self {
             thread_id: thread::current().id(),
             kind,
