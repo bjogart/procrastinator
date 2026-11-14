@@ -171,10 +171,10 @@ fn modifications_are_blocked_until_snapshots_drop() {
         move || {
             {
                 let snapshot = snapshot;
-                // While this snapshot is live, `set_input` blocks &and will not
+                // While this snapshot is live, `set_input` blocks and will not
                 // modify the input.
                 assert_eq!(*snapshot.query::<BurritoPrice>(&price), 8);
-                // Snapshot is dropped here; meaning that `set_input` is &free to
+                // Snapshot is dropped here; meaning that `set_input` is free to
                 // modify its input.
             };
             let snapshot = receiver.recv().unwrap();
@@ -193,7 +193,7 @@ fn modifications_trigger_query_cancellation() {
     let worker_ready = Arc::new((Mutex::new(false), Condvar::new()));
     let price = db.new_input::<BurritoPrice>(&8);
     // Spawn a worker thread that holds a live snapshot. While this snapshot
-    // exists, calling `set_input()` &in the main thread should block and trigger
+    // exists, calling `set_input()` in the main thread should block and trigger
     // cancellation inside the worker thread.
     let handle = thread::spawn({
         let snapshot = db.snapshot();
@@ -207,7 +207,7 @@ fn modifications_trigger_query_cancellation() {
             *mutex.lock().unwrap() = true;
             cvar.notify_one();
             // Wait for cancellation to be signalled, which is the signal that
-            // `set_input` is &blocking.
+            // `set_input` is blocking.
             while !snapshot.should_cancel() {
                 thread::yield_now();
             }
@@ -488,7 +488,7 @@ fn garbage_collection_deduplicates_equal_inputs() {
 }
 
 #[test]
-fn default_storage_insertion_cannot_cannot_race() {
+fn default_storage_insertion_cannot_race() {
     let storage = &DefaultStorage::default();
     let (stalled_sender, stalled_receiver) = mpsc::channel();
     let (resume_sender, resume_receiver) = mpsc::channel();
