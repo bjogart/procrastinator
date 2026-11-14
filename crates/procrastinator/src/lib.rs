@@ -78,7 +78,7 @@ pub(crate) const INCONSISTENT_STATE: &str = "bug: database in inconsistent state
 ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, width: &Self::Args) -> Self::Out
 ///     where
 ///         S: Storage,
-///         H: Handler,
+///         H: Handler<S>,
 ///     {
 ///         let width = *snapshot.query::<Width>(width);
 ///         width * width
@@ -219,7 +219,7 @@ where
 ///     fn eval<S, H>(_snapshot: &Snapshot<S, H>, text: &Self::Args) -> Self::Out
 ///     where
 ///         S: Storage,
-///         H: Handler,
+///         H: Handler<S>,
 ///     {
 ///         text.to_uppercase()
 ///     }
@@ -233,7 +233,7 @@ where
 ///     fn eval<S, H>(_snapshot: &Snapshot<S, H>, text: &Self::Args) -> Self::Out
 ///     where
 ///         S: Storage,
-///         H: Handler,
+///         H: Handler<S>,
 ///     {
 ///         text.to_lowercase()
 ///     }
@@ -319,7 +319,7 @@ where
     /// and the database stays usable.
     pub fn new_input<I>(&mut self, value: &I::Value) -> InputId<I>
     where
-        H: Handler,
+        H: Handler<S>,
         I: Input,
     {
         let rev = self.runtime.rev.get();
@@ -384,7 +384,7 @@ where
     /// input.
     pub fn set_input<I>(&mut self, input_id: InputId<I>, value: &I::Value)
     where
-        H: Handler,
+        H: Handler<S>,
         I: Input,
     {
         let runtime = self.runtime.wait_exclusive();
@@ -453,7 +453,7 @@ where
     /// The panic propagates to the caller, and the database stays usable.
     pub fn gc(&mut self)
     where
-        H: Handler,
+        H: Handler<S>,
     {
         self.runtime.wait_exclusive().gc(&mut self.inputs);
     }
@@ -553,7 +553,7 @@ where
     ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, name: &Self::Args) -> Self::Out
     ///     where
     ///         S: Storage,
-    ///         H: Handler,
+    ///         H: Handler<S>,
     ///     {
     ///         // `Name` becomes a dependency of `Greet`. Inside `eval`, the
     ///         // storage is generic, so the handle is only known to implement
@@ -580,7 +580,7 @@ where
     /// error. It may panic, or return the value of an unrelated input.
     pub fn query<Q>(&self, args: &Q::Args) -> <S::Handle as Handle>::TypedHandle<Q::Out>
     where
-        H: Handler,
+        H: Handler<S>,
         Q: Query,
     {
         let query_id = QueryId::of::<Q>();
@@ -604,7 +604,7 @@ where
 
     fn verify_memo(&self, current_rev: Revision, memo_id: MemoId<S>)
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let (last_verified, deps) = {
             let (last_verified, deps) = self.runtime.memos.verification(memo_id);
@@ -626,7 +626,7 @@ where
 
     fn eval_memo(&self, current_rev: Revision, memo_id: MemoId<S>)
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let MemoId { query_id, args_id } = memo_id;
         let ops = self
@@ -658,7 +658,7 @@ where
         dep: MemoId<S>,
     ) -> bool
     where
-        H: Handler,
+        H: Handler<S>,
     {
         self.verify_memo(current_rev, dep);
         self.runtime.memos.last_changed(dep) > memo_last_verified
@@ -666,7 +666,7 @@ where
 
     fn install_query(&self) -> QueryUpdate<'_, S, H>
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let mut active_queries = self.active_queries.borrow_mut();
         let ActiveQueryStack(active_queries) = &mut *active_queries;
@@ -697,7 +697,7 @@ where
 {
     fn gc(&mut self, inputs: &mut InputRegistry<S>)
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let Self {
             storage,

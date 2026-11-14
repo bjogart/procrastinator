@@ -14,6 +14,7 @@ use core::time::Duration;
 use std::time::Instant;
 
 use crate::handler::Handler as HandlerTrait;
+use crate::storage::Storage;
 
 /// A handler that counts and times database operations.
 ///
@@ -54,7 +55,7 @@ use crate::handler::Handler as HandlerTrait;
 ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, width: &Self::Args) -> Self::Out
 ///     where
 ///         S: Storage,
-///         H: Handler,
+///         H: Handler<S>,
 ///     {
 ///         let width = *snapshot.query::<Width>(width);
 ///         width * width
@@ -92,10 +93,13 @@ struct AtomicDuration {
     ns: AtomicU64,
 }
 
-impl HandlerTrait for Handler {
+impl<S> HandlerTrait<S> for Handler
+where
+    S: Storage,
+{
     type Payload = (ScopedEventKind, Instant);
 
-    fn event(&self, event: Event) {
+    fn event(&self, event: Event<S>) {
         match event.kind {
             EventKind::RegisterQueryOps(_) => {
                 self.registered_query_ops.fetch_add(1, Ordering::Relaxed);
@@ -103,7 +107,7 @@ impl HandlerTrait for Handler {
             EventKind::DeregisterQueryOps(_) => {
                 self.registered_query_ops.fetch_sub(1, Ordering::Relaxed);
             }
-            EventKind::StoreValue => {
+            EventKind::StoreValue(_) => {
                 self.stored_values.fetch_add(1, Ordering::Relaxed);
             }
             EventKind::FreeValues(count) => {

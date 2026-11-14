@@ -32,7 +32,7 @@
 //!     fn eval<S, H>(snapshot: &Snapshot<S, H>, words: &Self::Args) -> Self::Out
 //!     where
 //!         S: Storage,
-//!         H: Handler,
+//!         H: Handler<S>,
 //!     {
 //!         snapshot.query::<Words>(words).split_whitespace().count()
 //!     }
@@ -85,7 +85,7 @@ use core::marker::PhantomData;
 ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, n: &Self::Args) -> Self::Out
 ///     where
 ///         S: Storage,
-///         H: Handler,
+///         H: Handler<S>,
 ///     {
 ///         if *n < 2 {
 ///             *n
@@ -163,7 +163,7 @@ pub trait Query: Send + Sync + 'static {
     ///     fn eval<S, H>(_snapshot: &Snapshot<S, H>, text: &Self::Args) -> Self::Out
     ///     where
     ///         S: Storage,
-    ///         H: Handler,
+    ///         H: Handler<S>,
     ///     {
     ///         text.to_uppercase()
     ///     }
@@ -182,7 +182,7 @@ pub trait Query: Send + Sync + 'static {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler;
+        H: Handler<S>;
 }
 
 /// A value that is set from outside the computation, like a variable.
@@ -304,7 +304,7 @@ type TransferInput<S> = fn(
 ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, (a, b): &Self::Args) -> Self::Out
 ///     where
 ///         S: Storage,
-///         H: Handler,
+///         H: Handler<S>,
 ///     {
 ///         let a = *snapshot.query::<Price>(a);
 ///         let b = *snapshot.query::<Price>(b);
@@ -336,7 +336,7 @@ where
     fn eval<S, H>(_: &Snapshot<S, H>, _: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         panic!("Inputs should be defined through `Db::{{new,set}}_input()`, not evaluated")
     }

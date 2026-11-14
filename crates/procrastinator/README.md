@@ -112,7 +112,7 @@ impl Query for EntryTotal {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, entry: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         entry.price * entry.quantity
     }
@@ -127,7 +127,7 @@ impl Query for Subtotal {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, cart: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         // Queries are called with `Snapshot::query`. Inputs also implement
         // `Query` and can be accessed the same way as queries.
@@ -152,7 +152,7 @@ impl Query for Shipping {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, cart: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         if *snapshot.query::<Subtotal>(cart) < 25 {
             10
@@ -170,7 +170,7 @@ impl Query for Total {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, cart: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         let subtotal = *snapshot.query::<Subtotal>(cart);
         let shipping = *snapshot.query::<Shipping>(cart);

@@ -30,6 +30,7 @@
 //! ```
 
 use crate::QueryId;
+use crate::storage::Storage;
 use std::thread;
 use std::thread::ThreadId;
 
@@ -69,7 +70,8 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 /// use procrastinator::handler::ScopedEvent;
 /// use procrastinator::handler::ScopedEventKind;
 /// use procrastinator::query::Input;
-/// use procrastinator::storage::default::Storage;
+/// use procrastinator::storage::default;
+/// use procrastinator::storage::Storage;
 /// use std::sync::atomic::AtomicUsize;
 /// use std::sync::atomic::Ordering;
 ///
@@ -78,10 +80,13 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 ///     queries: AtomicUsize,
 /// }
 ///
-/// impl Handler for QueryCounter {
+/// impl<S> Handler<S> for QueryCounter
+/// where
+///     S: Storage,
+/// {
 ///     type Payload = ();
 ///
-///     fn event(&self, _event: Event) {}
+///     fn event(&self, _event: Event<S>) {}
 ///
 ///     fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
 ///         if let ScopedEventKind::Query = event.kind {
@@ -97,7 +102,7 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 ///     type Value = u32;
 /// }
 ///
-/// let mut db: Db<Storage, QueryCounter> = Db::default();
+/// let mut db: Db<default::Storage, QueryCounter> = Db::default();
 /// let width = db.new_input::<Width>(&3);
 /// let snapshot = db.snapshot();
 /// snapshot.query::<Width>(&width);
@@ -110,9 +115,10 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 /// A panic in a handler method propagates out of the database operation that
 /// triggered the event. Note that [`Handler::exit_scope`] also runs while a
 /// panic in a query unwinds, and panicking there aborts the process.
-pub trait Handler
+pub trait Handler<S>
 where
     Self: Sized,
+    S: Storage,
 {
     /// Data carried from the start of a scope to its end.
     ///
@@ -137,7 +143,8 @@ where
     /// use procrastinator::handler::Handler;
     /// use procrastinator::handler::ScopedEvent;
     /// use procrastinator::query::Input;
-    /// use procrastinator::storage::default::Storage;
+    /// use procrastinator::storage::default;
+    /// use procrastinator::storage::Storage;
     /// use std::sync::atomic::AtomicUsize;
     /// use std::sync::atomic::Ordering;
     ///
@@ -146,10 +153,13 @@ where
     ///     memos: AtomicUsize,
     /// }
     ///
-    /// impl Handler for MemoCounter {
+    /// impl<S> Handler<S> for MemoCounter
+    /// where
+    ///     S: Storage,
+    /// {
     ///     type Payload = ();
     ///
-    ///     fn event(&self, event: Event) {
+    ///     fn event(&self, event: Event<S>) {
     ///         match event.kind {
     ///             EventKind::RegisterMemo => {
     ///                 self.memos.fetch_add(1, Ordering::Relaxed);
@@ -171,13 +181,13 @@ where
     ///     type Value = u32;
     /// }
     ///
-    /// let mut db: Db<Storage, MemoCounter> = Db::default();
+    /// let mut db: Db<default::Storage, MemoCounter> = Db::default();
     /// // Every input has a memo that holds its value.
     /// db.new_input::<Width>(&3);
     /// db.new_input::<Width>(&4);
     /// assert_eq!(db.event_handler().memos.load(Ordering::Relaxed), 2);
     /// ```
-    fn event(&self, event: Event);
+    fn event(&self, event: Event<S>);
 
     /// Called when a [`ScopedEvent`] starts.
     ///
@@ -197,6 +207,7 @@ where
     /// use procrastinator::handler::Handler;
     /// use procrastinator::handler::ScopedEvent;
     /// use procrastinator::handler::ScopedEventKind;
+    /// use procrastinator::storage::Storage;
     /// use std::sync::Mutex;
     /// use std::time::Duration;
     /// use std::time::Instant;
@@ -206,11 +217,14 @@ where
     ///     total: Mutex<Duration>,
     /// }
     ///
-    /// impl Handler for EvalTimer {
+    /// impl<S> Handler<S> for EvalTimer
+    /// where
+    ///     S: Storage,
+    /// {
     ///     // The start time of an evaluation, or `None` for other scopes.
     ///     type Payload = Option<Instant>;
     ///
-    ///     fn event(&self, _event: Event) {}
+    ///     fn event(&self, _event: Event<S>) {}
     ///
     ///     fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
     ///         match event.kind {
@@ -242,11 +256,14 @@ where
 ///
 /// Passed to [`Handler::event`]. See there for an example.
 #[derive(Clone, Copy, Debug)]
-pub struct Event {
+pub struct Event<S>
+where
+    S: Storage,
+{
     /// The thread on which the event happened.
     pub thread_id: ThreadId,
     /// What happened.
-    pub kind: EventKind,
+    pub kind: EventKind<S>,
 }
 
 /// The kinds of [`Event`].
@@ -254,7 +271,10 @@ pub struct Event {
 /// Events come in pairs that increase and decrease a count, so a handler can
 /// track how many of each resource the database currently holds.
 #[derive(Clone, Copy, Debug)]
-pub enum EventKind {
+pub enum EventKind<S>
+where
+    S: Storage,
+{
     /// A query type was registered with the database.
     ///
     /// This happens the first time a query or input type is used, and again
@@ -270,7 +290,7 @@ pub enum EventKind {
     /// default [`Storage`](crate::storage::default::Storage) stores each
     /// distinct value only once, so storing a value equal to one that is
     /// already stored does not trigger this event.
-    StoreValue,
+    StoreValue(S::Id),
     /// [`Db::gc`](crate::Db::gc) freed this many stored values.
     FreeValues(usize),
     /// A memo was created.
@@ -314,28 +334,35 @@ pub enum ScopedEventKind {
 /// The guard keeps every [`Handler::enter_scope`] call matched with exactly one
 /// [`Handler::exit_scope`] call, also when unwinding from a panic.
 #[derive(Debug)]
-pub(crate) struct ScopeGuard<'handler, H>
+pub(crate) struct ScopeGuard<'handler, S, H>
 where
-    H: Handler,
+    S: Storage,
+    H: Handler<S>,
 {
     handler: &'handler H,
     payload: Option<H::Payload>,
 }
 
-impl Handler for () {
+impl<S> Handler<S> for ()
+where
+    S: Storage,
+{
     type Payload = ();
 
-    fn event(&self, _: Event) {}
+    fn event(&self, _: Event<S>) {}
 
     fn enter_scope(&self, _: ScopedEvent) -> Self::Payload {}
 
     fn exit_scope(&self, (): Self::Payload) {}
 }
 
-impl Event {
+impl<S> Event<S>
+where
+    S: Storage,
+{
     /// Constructs a new event.
     #[must_use]
-    pub fn new(kind: EventKind) -> Self {
+    pub fn new(kind: EventKind<S>) -> Self {
         Self {
             thread_id: thread::current().id(),
             kind,
@@ -354,9 +381,10 @@ impl ScopedEvent {
     }
 }
 
-impl<'handler, H> ScopeGuard<'handler, H>
+impl<'handler, S, H> ScopeGuard<'handler, S, H>
 where
-    H: Handler,
+    S: Storage,
+    H: Handler<S>,
 {
     pub(crate) fn new(handler: &'handler H, event: ScopedEvent) -> Self {
         Self {
@@ -366,9 +394,10 @@ where
     }
 }
 
-impl<H> Drop for ScopeGuard<'_, H>
+impl<S, H> Drop for ScopeGuard<'_, S, H>
 where
-    H: Handler,
+    S: Storage,
+    H: Handler<S>,
 {
     fn drop(&mut self) {
         self.handler

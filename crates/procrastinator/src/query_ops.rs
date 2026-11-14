@@ -40,7 +40,7 @@ where
 {
     pub(crate) fn query_id<Q>(&self, handler: &H, query_id: QueryId)
     where
-        H: Handler,
+        H: Handler<S>,
         Q: Query,
     {
         let Self(registry) = self;
@@ -60,7 +60,7 @@ where
 
     pub(crate) fn get(&self, query_id: QueryId) -> Option<QueryOps<S, H>>
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let Self(registry) = self;
         registry
@@ -72,7 +72,7 @@ where
 
     pub(crate) fn retain(&mut self, handler: &H, retain: impl Fn(QueryId) -> bool)
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let Self(registry) = self;
         let registry = registry.get_mut().expect(INCONSISTENT_STATE);
@@ -102,7 +102,7 @@ where
 {
     fn new<Q>() -> Self
     where
-        H: Handler,
+        H: Handler<S>,
         Q: Query,
     {
         return Self {
@@ -113,7 +113,7 @@ where
         fn eval<S, H, Q>(snapshot: &Snapshot<S, H>, args: S::Handle) -> Box<dyn Any + Send + Sync>
         where
             S: Storage,
-            H: Handler,
+            H: Handler<S>,
             Q: Query,
         {
             let args = args.downcast::<Q::Args>();
@@ -124,7 +124,7 @@ where
         fn store_output<S, H, T>(storage: &S, handler: &H, out: &(dyn Any + Send + Sync)) -> S::Id
         where
             S: Storage,
-            H: Handler,
+            H: Handler<S>,
             T: Clone + Eq + Hash + Send + Sync + 'static,
         {
             let Some(out) = out.downcast_ref::<T>() else {

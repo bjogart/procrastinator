@@ -101,7 +101,7 @@ impl StorageTrait for Storage {
 
     fn store<H, T>(&self, handler: &H, value: &T) -> Self::Id
     where
-        H: Handler,
+        H: Handler<Self>,
         T: Clone + Eq + Hash + Send + Sync + 'static,
     {
         let Self { inner, hasher } = self;
@@ -136,7 +136,7 @@ impl StorageTrait for Storage {
         };
         // User-defined handler implementations may panic, so emit the event
         // after the write lock is dropped.
-        handler.event(Event::new(EventKind::StoreValue));
+        handler.event(Event::new(EventKind::StoreValue(id)));
         id
     }
 
@@ -177,7 +177,7 @@ impl TransferTrait for Transfer<'_> {
 
     fn into_storage<H>(self, handler: &H) -> Self::Storage
     where
-        H: Handler,
+        H: Handler<Self::Storage>,
     {
         let freed_values = self
             .curr

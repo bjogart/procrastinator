@@ -30,7 +30,7 @@
 //!     fn eval<S, H>(_snapshot: &Snapshot<S, H>, n: &Self::Args) -> Self::Out
 //!     where
 //!         S: Storage,
-//!         H: Handler,
+//!         H: Handler<S>,
 //!     {
 //!         n * 2
 //!     }
@@ -163,7 +163,7 @@ pub trait Storage: Default + 'static {
     /// see the [trait documentation](Storage#panic-safety).
     fn store<H, T>(&self, handler: &H, value: &T) -> Self::Id
     where
-        H: Handler,
+        H: Handler<Self>,
         T: Clone + Eq + Hash + Send + Sync + 'static;
 
     /// Returns a handle to the value with the given ID.
@@ -249,7 +249,7 @@ pub trait Transfer {
     /// on `handler` with the number of values that were not transferred.
     fn into_storage<H>(self, handler: &H) -> Self::Storage
     where
-        H: Handler;
+        H: Handler<Self::Storage>;
 }
 
 /// A reference to a stored value whose type is only known at runtime.
