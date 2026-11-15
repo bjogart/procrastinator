@@ -17,12 +17,14 @@ use std::sync::RwLock;
 #[derive(Debug)]
 pub(crate) struct QueryOpsRegistry<S, H>(RwLock<HashMap<QueryId, QueryOps<S, H>>>)
 where
-    S: Storage;
+    S: Storage,
+    H: Handler<S>;
 
 #[derive(Debug)]
 pub(crate) struct QueryOps<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     pub(crate) eval: Eval<S, H>,
     pub(crate) store_output: StoreOut<S, H>,
@@ -37,6 +39,7 @@ type StoreOut<S, H> =
 impl<S, H> QueryOpsRegistry<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     pub(crate) fn query_id<Q>(&self, handler: &H, query_id: QueryId)
     where
@@ -90,6 +93,7 @@ where
 impl<S, H> Default for QueryOpsRegistry<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn default() -> Self {
         Self(RwLock::default())
@@ -99,6 +103,7 @@ where
 impl<S, H> QueryOps<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn new<Q>() -> Self
     where
@@ -138,10 +143,16 @@ where
 impl<S, H> Clone for QueryOps<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<S, H> Copy for QueryOps<S, H> where S: Storage {}
+impl<S, H> Copy for QueryOps<S, H>
+where
+    S: Storage,
+    H: Handler<S>,
+{
+}

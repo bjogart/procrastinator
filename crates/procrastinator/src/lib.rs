@@ -160,16 +160,19 @@ where
 pub struct Snapshot<S = DefaultStorage, H = ()>
 where
     S: Storage,
+    H: Handler<S>,
 {
     runtime: Shared<Runtime<S, H>>,
     active_queries: RefCell<ActiveQueryStack<S>>,
     handler: Arc<H>,
+    handler_local: H::Local,
 }
 
 #[derive(Debug)]
 struct Runtime<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     rev: GlobalRevision,
     storage: S,
@@ -239,6 +242,7 @@ where
 /// }
 ///
 /// impl Handler<default::Storage> for MemoLog {
+///     type Local = ();
 ///     type Payload = ();
 ///
 ///     fn event(&self, event: Event<default::Storage>) {
@@ -247,9 +251,14 @@ where
 ///         }
 ///     }
 ///
-///     fn enter_scope(&self, _event: ScopedEvent<default::Storage>) -> Self::Payload {}
+///     fn enter_scope(
+///         &self,
+///         (): &Self::Local,
+///         _event: ScopedEvent<default::Storage>,
+///     ) -> Self::Payload {
+///     }
 ///
-///     fn exit_scope(&self, (): Self::Payload) {}
+///     fn exit_scope(&self, (): &Self::Local, (): Self::Payload) {}
 /// }
 ///
 /// struct Width;
@@ -488,13 +497,16 @@ where
         I: Input,
     {
         let memo_id = self.inputs.memo_id(input_id);
+        let handler_local = H::Local::default();
         let _set_input_guard = ScopeGuard::new(
             &*self.handler,
+            &handler_local,
             ScopedEvent::new(ScopedEventKind::SetInput(memo_id)),
         );
         let runtime = {
             let _wait_guard = ScopeGuard::new(
                 &*self.handler,
+                &handler_local,
                 ScopedEvent::new(ScopedEventKind::WaitExclusive),
             );
             self.runtime.wait_exclusive()
@@ -565,10 +577,16 @@ where
     where
         H: Handler<S>,
     {
-        let _gc_guard = ScopeGuard::new(&*self.handler, ScopedEvent::new(ScopedEventKind::Gc));
+        let handler_local = H::Local::default();
+        let _gc_guard = ScopeGuard::new(
+            &*self.handler,
+            &handler_local,
+            ScopedEvent::new(ScopedEventKind::Gc),
+        );
         let runtime = {
             let _wait_guard = ScopeGuard::new(
                 &*self.handler,
+                &handler_local,
                 ScopedEvent::new(ScopedEventKind::WaitExclusive),
             );
             self.runtime.wait_exclusive()
@@ -594,11 +612,13 @@ where
 impl<S, H> Snapshot<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn new(runtime: Shared<Runtime<S, H>>, handler: Arc<H>) -> Self {
         Self {
             runtime,
             handler,
+            handler_local: H::Local::default(),
             active_queries: RefCell::default(),
         }
     }
@@ -706,6 +726,7 @@ where
         let query_id = QueryId::of::<Q>();
         let _query_guard = ScopeGuard::new(
             &*self.handler,
+            &self.handler_local,
             ScopedEvent::new(ScopedEventKind::Query(query_id)),
         );
         self.runtime
@@ -758,6 +779,7 @@ where
         let out = {
             let _eval_guard = ScopeGuard::new(
                 &*self.handler,
+                &self.handler_local,
                 ScopedEvent::new(ScopedEventKind::Eval(memo_id)),
             );
             (ops.eval)(self, args)
@@ -813,11 +835,9 @@ where
 impl<S, H> Runtime<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
-    fn gc(&mut self, handler: &H, inputs: &mut InputRegistry<S, H>)
-    where
-        H: Handler<S>,
-    {
+    fn gc(&mut self, handler: &H, inputs: &mut InputRegistry<S, H>) {
         let Self {
             storage,
             memos,

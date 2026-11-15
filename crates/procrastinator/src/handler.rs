@@ -39,18 +39,22 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 
 /// Receives events from a database.
 ///
-/// A [`Db`](crate::Db) calls its handler at points of interest during its
-/// work. There are two kinds of events:
+/// A [`Db`](crate::Db) calls its handler at points of interest during its work.
+/// There are two kinds of events:
 ///
-/// - An [`Event`] marks something that happened at a single point in time,
-///   like storing a value. It is passed to [`Handler::event`].
+/// - An [`Event`] marks something that happened at a single point in time, like
+///   storing a value. It is passed to [`Handler::event`].
 /// - A [`ScopedEvent`] marks a span of time, like the evaluation of a query.
 ///   The database calls [`Handler::enter_scope`] when the span starts and
 ///   [`Handler::exit_scope`] when it ends. Scopes nest: a query that calls
 ///   another query is still in its own scope while the inner one runs.
 ///
-/// The database creates its handler with [`Default`], and you can read it
-/// back with [`Db::event_handler`](crate::Db::event_handler) or
+/// Handlers that track nested scopes can keep state in [`Handler::Local`]. The
+/// [`Db`](crate::Db) and every [`Snapshot`](crate::Snapshot) own one value of
+/// that type each, and pass it to the scope methods.
+///
+/// The database creates its handler with [`Default`], and you can read it back
+/// with [`Db::event_handler`](crate::Db::event_handler) or
 /// [`Snapshot::event_handler`](crate::Snapshot::event_handler).
 ///
 /// All methods take `&self`, and with multiple snapshots they may be called
@@ -83,17 +87,18 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 /// where
 ///     S: Storage,
 /// {
+///     type Local = ();
 ///     type Payload = ();
 ///
 ///     fn event(&self, _event: Event<S>) {}
 ///
-///     fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload {
+///     fn enter_scope(&self, (): &Self::Local, event: ScopedEvent<S>) -> Self::Payload {
 ///         if let ScopedEventKind::Query(_) = event.kind {
 ///             self.queries.fetch_add(1, Ordering::Relaxed);
 ///         }
 ///     }
 ///
-///     fn exit_scope(&self, (): Self::Payload) {}
+///     fn exit_scope(&self, (): &Self::Local, (): Self::Payload) {}
 /// }
 ///
 /// struct Width;
@@ -119,12 +124,109 @@ where
     Self: Sized + Default,
     S: Storage,
 {
+    /// State shared by the scopes of one [`Db`](crate::Db) or one
+    /// [`Snapshot`](crate::Snapshot).
+    ///
+    /// The database and each of its snapshots create one value of this type
+    /// with [`Default`], and pass it to every [`Handler::enter_scope`] and
+    /// [`Handler::exit_scope`] call they make. Scopes that share a value are
+    /// properly nested and never run at the same time, so the value needs no
+    /// synchronization: a [`Cell`](core::cell::Cell) is enough to mutate it. A
+    /// handler can use it to pass information between a scope and the scopes
+    /// nested inside it, for example to subtract the time spent in nested
+    /// scopes from the time of the outer scope.
+    ///
+    /// The value lives as long as its owner, and it moves along when a snapshot
+    /// is sent to another thread. To send a [`Snapshot`](crate::Snapshot) to
+    /// another thread, this type must be [`Send`]. Use `()` if no state is
+    /// needed.
+    ///
+    /// # Examples
+    ///
+    /// A handler that records how deeply query calls were nested at most:
+    ///
+    /// ```
+    /// use procrastinator::Db;
+    /// use procrastinator::Snapshot;
+    /// use procrastinator::handler::Event;
+    /// use procrastinator::handler::Handler;
+    /// use procrastinator::handler::ScopedEvent;
+    /// use procrastinator::handler::ScopedEventKind;
+    /// use procrastinator::query::Input;
+    /// use procrastinator::query::InputId;
+    /// use procrastinator::query::Query;
+    /// use procrastinator::storage::Storage;
+    /// use procrastinator::storage::default;
+    /// use std::cell::Cell;
+    /// use std::sync::atomic::AtomicUsize;
+    /// use std::sync::atomic::Ordering;
+    ///
+    /// #[derive(Default)]
+    /// struct MaxDepth {
+    ///     max: AtomicUsize,
+    /// }
+    ///
+    /// impl<S> Handler<S> for MaxDepth
+    /// where
+    ///     S: Storage,
+    /// {
+    ///     // The number of query calls that are currently in progress.
+    ///     type Local = Cell<usize>;
+    ///     // Whether the scope is a query call.
+    ///     type Payload = bool;
+    ///
+    ///     fn event(&self, _event: Event<S>) {}
+    ///
+    ///     fn enter_scope(&self, depth: &Self::Local, event: ScopedEvent<S>) -> Self::Payload {
+    ///         let is_query = matches!(event.kind, ScopedEventKind::Query(_));
+    ///         if is_query {
+    ///             depth.set(depth.get() + 1);
+    ///             self.max.fetch_max(depth.get(), Ordering::Relaxed);
+    ///         }
+    ///         is_query
+    ///     }
+    ///
+    ///     fn exit_scope(&self, depth: &Self::Local, is_query: Self::Payload) {
+    ///         if is_query {
+    ///             depth.set(depth.get() - 1);
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// struct Width;
+    /// impl Input for Width {
+    ///     type Value = u32;
+    /// }
+    ///
+    /// struct Area;
+    /// impl Query for Area {
+    ///     type Args = InputId<Width>;
+    ///     type Out = u32;
+    ///
+    ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, width: &Self::Args) -> Self::Out
+    ///     where
+    ///         S: Storage,
+    ///         H: Handler<S>,
+    ///     {
+    ///         let width = *snapshot.query::<Width>(width);
+    ///         width * width
+    ///     }
+    /// }
+    ///
+    /// let mut db: Db<default::Storage, MaxDepth> = Db::default();
+    /// let width = db.new_input::<Width>(&3);
+    /// let snapshot = db.snapshot();
+    /// snapshot.query::<Area>(&width);
+    /// // `Area` called `Width`.
+    /// assert_eq!(snapshot.event_handler().max.load(Ordering::Relaxed), 2);
+    /// ```
+    type Local: Default;
+
     /// Data carried from the start of a scope to its end.
     ///
-    /// The value returned by [`Handler::enter_scope`] is passed to the
-    /// matching [`Handler::exit_scope`] call. For example, a profiler can use
-    /// the start time of the scope as its payload. Use `()` if no data is
-    /// needed.
+    /// The value returned by [`Handler::enter_scope`] is passed to the matching
+    /// [`Handler::exit_scope`] call. For example, a profiler can use the start
+    /// time of the scope as its payload. Use `()` if no data is needed.
     type Payload;
 
     /// Called when an [`Event`] happens.
@@ -156,6 +258,7 @@ where
     /// where
     ///     S: Storage,
     /// {
+    ///     type Local = ();
     ///     type Payload = ();
     ///
     ///     fn event(&self, event: Event<S>) {
@@ -170,9 +273,9 @@ where
     ///         }
     ///     }
     ///
-    ///     fn enter_scope(&self, _event: ScopedEvent<S>) -> Self::Payload {}
+    ///     fn enter_scope(&self, (): &Self::Local, _event: ScopedEvent<S>) -> Self::Payload {}
     ///
-    ///     fn exit_scope(&self, (): Self::Payload) {}
+    ///     fn exit_scope(&self, (): &Self::Local, (): Self::Payload) {}
     /// }
     ///
     /// struct Width;
@@ -192,9 +295,13 @@ where
     ///
     /// The returned payload is passed to the [`Handler::exit_scope`] call that
     /// ends this scope. Every scope that is entered is exited exactly once,
-    /// even if a query panics. Scopes on one thread are properly nested, so the
-    /// most recently entered scope on a thread is always the first to exit.
-    /// Scopes on different threads may interleave.
+    /// even if a query panics.
+    ///
+    /// `local` belongs to the [`Db`](crate::Db) or
+    /// [`Snapshot`](crate::Snapshot) that entered the scope. Scopes that share
+    /// a `local` are properly nested, so the most recently entered scope is
+    /// always the first to exit. Scopes of different snapshots may interleave.
+    /// See [`Handler::Local`] for details.
     ///
     /// # Examples
     ///
@@ -219,35 +326,37 @@ where
     /// where
     ///     S: Storage,
     /// {
+    ///     type Local = ();
     ///     // The start time of an evaluation, or `None` for other scopes.
     ///     type Payload = Option<Instant>;
     ///
     ///     fn event(&self, _event: Event<S>) {}
     ///
-    ///     fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload {
+    ///     fn enter_scope(&self, (): &Self::Local, event: ScopedEvent<S>) -> Self::Payload {
     ///         match event.kind {
     ///             ScopedEventKind::Eval(_) => Some(Instant::now()),
     ///             _ => None,
     ///         }
     ///     }
     ///
-    ///     fn exit_scope(&self, start: Self::Payload) {
+    ///     fn exit_scope(&self, (): &Self::Local, start: Self::Payload) {
     ///         if let Some(start) = start {
     ///             *self.total.lock().unwrap() += start.elapsed();
     ///         }
     ///     }
     /// }
     /// ```
-    fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload;
+    fn enter_scope(&self, local: &Self::Local, event: ScopedEvent<S>) -> Self::Payload;
 
     /// Called when a [`ScopedEvent`] ends.
     ///
     /// Receives the payload that [`Handler::enter_scope`] returned when the
-    /// scope started. See [`Handler::enter_scope`] for an example.
+    /// scope started, and the same `local` that was passed to that call. See
+    /// [`Handler::enter_scope`] for an example.
     ///
     /// This method also runs while a panic unwinds. Panicking here then aborts
     /// the process.
-    fn exit_scope(&self, payload: Self::Payload);
+    fn exit_scope(&self, local: &Self::Local, payload: Self::Payload);
 }
 
 /// Something that happened at a single point in time.
@@ -391,6 +500,7 @@ where
     H: Handler<S>,
 {
     handler: &'handler H,
+    local: &'handler H::Local,
     payload: Option<H::Payload>,
 }
 
@@ -398,13 +508,14 @@ impl<S> Handler<S> for ()
 where
     S: Storage,
 {
+    type Local = ();
     type Payload = ();
 
     fn event(&self, _: Event<S>) {}
 
-    fn enter_scope(&self, _: ScopedEvent<S>) -> Self::Payload {}
+    fn enter_scope(&self, (): &Self::Local, _: ScopedEvent<S>) -> Self::Payload {}
 
-    fn exit_scope(&self, (): Self::Payload) {}
+    fn exit_scope(&self, (): &Self::Local, (): Self::Payload) {}
 }
 
 impl<S> Event<S>
@@ -434,10 +545,15 @@ where
     S: Storage,
     H: Handler<S>,
 {
-    pub(crate) fn new(handler: &'handler H, event: ScopedEvent<S>) -> Self {
+    pub(crate) fn new(
+        handler: &'handler H,
+        local: &'handler H::Local,
+        event: ScopedEvent<S>,
+    ) -> Self {
         Self {
             handler,
-            payload: Some(handler.enter_scope(event)),
+            local,
+            payload: Some(handler.enter_scope(local, event)),
         }
     }
 }
@@ -448,7 +564,11 @@ where
     H: Handler<S>,
 {
     fn drop(&mut self) {
-        self.handler
-            .exit_scope(self.payload.take().expect(VALUE_ALREADY_TAKEN));
+        let Self {
+            handler,
+            local,
+            payload,
+        } = self;
+        handler.exit_scope(local, payload.take().expect(VALUE_ALREADY_TAKEN));
     }
 }

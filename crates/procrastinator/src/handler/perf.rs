@@ -97,6 +97,7 @@ impl<S> HandlerTrait<S> for Handler
 where
     S: Storage,
 {
+    type Local = ();
     type Payload = (ScopedEventKind<S>, Instant);
 
     fn event(&self, event: Event<S>) {
@@ -123,7 +124,7 @@ where
         }
     }
 
-    fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload {
+    fn enter_scope(&self, (): &Self::Local, event: ScopedEvent<S>) -> Self::Payload {
         match event.kind {
             ScopedEventKind::Query(_) => {
                 self.query_count.fetch_add(1, Ordering::Relaxed);
@@ -137,7 +138,7 @@ where
         (event.kind, Instant::now())
     }
 
-    fn exit_scope(&self, payload: Self::Payload) {
+    fn exit_scope(&self, (): &Self::Local, payload: Self::Payload) {
         let (kind, start) = payload;
         let elapsed = start.elapsed();
         match kind {
