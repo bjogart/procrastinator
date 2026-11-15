@@ -362,18 +362,29 @@ where
     /// A call to [`Db::set_input`](crate::Db::set_input) for the input whose
     /// memo has this ID.
     ///
-    /// The scope covers storing the new value and updating the input's memo. It
-    /// starts once every [`Snapshot`](crate::Snapshot) has been dropped, so it
-    /// does not include the time spent waiting for them.
+    /// The scope covers the whole call: waiting for every
+    /// [`Snapshot`](crate::Snapshot) to drop (see
+    /// [`WaitExclusive`](ScopedEventKind::WaitExclusive)), storing the new
+    /// value, and updating the input's memo.
     SetInput(MemoId<S>),
     /// A call to [`Db::gc`](crate::Db::gc).
     ///
-    /// The scope covers the whole collection: transferring inputs, freeing
-    /// values and memos, and deregistering query types. The events for these
-    /// steps fire inside this scope. As with
-    /// [`SetInput`](ScopedEventKind::SetInput), the scope starts once every
-    /// [`Snapshot`](crate::Snapshot) has been dropped.
+    /// The scope covers the whole call: waiting for every
+    /// [`Snapshot`](crate::Snapshot) to drop (see
+    /// [`WaitExclusive`](ScopedEventKind::WaitExclusive)), transferring inputs,
+    /// freeing values and memos, and deregistering query types. The events for
+    /// these steps fire inside this scope.
     Gc,
+    /// Waiting until every [`Snapshot`](crate::Snapshot) of the database has
+    /// been dropped.
+    ///
+    /// [`Db::set_input`](crate::Db::set_input) and [`Db::gc`](crate::Db::gc)
+    /// need exclusive access to the database, so they block until no snapshots
+    /// remain. This scope is always nested inside a
+    /// [`SetInput`](ScopedEventKind::SetInput) or [`Gc`](ScopedEventKind::Gc)
+    /// scope, and ends before that call does any other work. It is entered even
+    /// if no snapshots exist, in which case it ends right away.
+    WaitExclusive,
 }
 
 /// Enters a scope on creation and exits it when dropped.

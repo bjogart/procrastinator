@@ -19,6 +19,7 @@ use crate::storage::Transfer as _;
 use crate::storage::default::Storage as DefaultStorage;
 use crate::update::PendingCommit;
 use crate::update::QueryUpdate;
+use alloc::sync::Arc;
 use core::any::TypeId;
 use core::any::type_name;
 use core::cell::RefCell;
@@ -51,7 +52,7 @@ pub(crate) const INCONSISTENT_STATE: &str = "bug: database in inconsistent state
 /// internal events:
 ///
 /// - `S` is the [`Storage`] that holds argument and output values. The
-///   default storage hands out query results as [`Arc`](alloc::sync::Arc)s.
+///   default storage hands out query results as [`Arc`]s.
 /// - `H` is the [`Handler`] that receives events, for example for profiling.
 ///   The default, `()`, ignores all events.
 ///
@@ -108,6 +109,7 @@ where
 {
     runtime: Shared<Runtime<S, H>>,
     inputs: InputRegistry<S, H>,
+    handler: Arc<H>,
 }
 
 /// A read-only view of a [`Db`], used to run queries.
@@ -161,6 +163,7 @@ where
 {
     runtime: Shared<Runtime<S, H>>,
     active_queries: RefCell<ActiveQueryStack<S>>,
+    handler: Arc<H>,
 }
 
 #[derive(Debug)]
@@ -172,7 +175,6 @@ where
     storage: S,
     memos: Memos<S>,
     query_ops: QueryOpsRegistry<S, H>,
-    handler: H,
 }
 
 #[derive(Debug)]
@@ -378,7 +380,7 @@ where
     /// ```
     #[must_use]
     pub fn event_handler(&self) -> &H {
-        &self.runtime.handler
+        &self.handler
     }
 
     /// Creates a new input with the given initial value.
@@ -427,17 +429,13 @@ where
         let query_id = QueryId::of::<I>();
         self.runtime
             .query_ops
-            .query_id::<I>(&self.runtime.handler, query_id);
-        let value_id = self.runtime.storage.store(&self.runtime.handler, value);
+            .query_id::<I>(&*self.handler, query_id);
+        let value_id = self.runtime.storage.store(&*self.handler, value);
         self.inputs.new_input(|input_id| {
-            let dummy_args_id = self.runtime.storage.store(&self.runtime.handler, &input_id);
-            self.runtime.memos.new_input(
-                &self.runtime.handler,
-                rev,
-                query_id,
-                dummy_args_id,
-                value_id,
-            )
+            let dummy_args_id = self.runtime.storage.store(&*self.handler, &input_id);
+            self.runtime
+                .memos
+                .new_input(&*self.handler, rev, query_id, dummy_args_id, value_id)
         })
     }
 
@@ -489,13 +487,19 @@ where
         H: Handler<S>,
         I: Input,
     {
-        let runtime = self.runtime.wait_exclusive();
         let memo_id = self.inputs.memo_id(input_id);
         let _set_input_guard = ScopeGuard::new(
-            &runtime.handler,
+            &*self.handler,
             ScopedEvent::new(ScopedEventKind::SetInput(memo_id)),
         );
-        let new_value_id = runtime.storage.store(&runtime.handler, value);
+        let runtime = {
+            let _wait_guard = ScopeGuard::new(
+                &*self.handler,
+                ScopedEvent::new(ScopedEventKind::WaitExclusive),
+            );
+            self.runtime.wait_exclusive()
+        };
+        let new_value_id = runtime.storage.store(&*self.handler, value);
         if runtime.memos.value_id(memo_id) != Some(new_value_id) {
             let current_rev = runtime.rev.bump();
             runtime.memos.set_input(memo_id, current_rev, new_value_id);
@@ -536,7 +540,7 @@ where
     /// that mutates the `Db`.
     #[must_use]
     pub fn snapshot(&self) -> Snapshot<S, H> {
-        Snapshot::new(self.runtime.clone())
+        Snapshot::new(self.runtime.clone(), Arc::clone(&self.handler))
     }
 
     /// Frees all memoized query results.
@@ -561,7 +565,15 @@ where
     where
         H: Handler<S>,
     {
-        self.runtime.wait_exclusive().gc(&mut self.inputs);
+        let _gc_guard = ScopeGuard::new(&*self.handler, ScopedEvent::new(ScopedEventKind::Gc));
+        let runtime = {
+            let _wait_guard = ScopeGuard::new(
+                &*self.handler,
+                ScopedEvent::new(ScopedEventKind::WaitExclusive),
+            );
+            self.runtime.wait_exclusive()
+        };
+        runtime.gc(&self.handler, &mut self.inputs);
     }
 }
 
@@ -574,6 +586,7 @@ where
         Self {
             runtime: Shared::default(),
             inputs: InputRegistry::default(),
+            handler: Arc::default(),
         }
     }
 }
@@ -582,9 +595,10 @@ impl<S, H> Snapshot<S, H>
 where
     S: Storage,
 {
-    fn new(runtime: Shared<Runtime<S, H>>) -> Self {
+    fn new(runtime: Shared<Runtime<S, H>>, handler: Arc<H>) -> Self {
         Self {
             runtime,
+            handler,
             active_queries: RefCell::default(),
         }
     }
@@ -617,7 +631,7 @@ where
     /// ```
     #[must_use]
     pub fn event_handler(&self) -> &H {
-        &self.runtime.handler
+        &self.handler
     }
 
     /// Runs query `Q` with the given arguments and returns a handle to its
@@ -633,7 +647,7 @@ where
     /// a dependency of the calling query.
     ///
     /// The returned handle dereferences to `Q::Out`. With the default
-    /// [`Storage`], the handle is an [`Arc`](alloc::sync::Arc).
+    /// [`Storage`], the handle is an [`Arc`].
     ///
     /// # Examples
     ///
@@ -691,17 +705,17 @@ where
     {
         let query_id = QueryId::of::<Q>();
         let _query_guard = ScopeGuard::new(
-            &self.runtime.handler,
+            &*self.handler,
             ScopedEvent::new(ScopedEventKind::Query(query_id)),
         );
         self.runtime
             .query_ops
-            .query_id::<Q>(&self.runtime.handler, query_id);
-        let args_id = self.runtime.storage.store(&self.runtime.handler, args);
+            .query_id::<Q>(&*self.handler, query_id);
+        let args_id = self.runtime.storage.store(&*self.handler, args);
         let memo_id = self
             .runtime
             .memos
-            .memo_id(&self.runtime.handler, query_id, args_id);
+            .memo_id(&*self.handler, query_id, args_id);
         self.track_dep(memo_id);
         self.verify_memo(self.runtime.rev.get(), memo_id);
         let value_id = self.memoized_value_id(memo_id);
@@ -743,12 +757,12 @@ where
         let mut query_update = self.install_query();
         let out = {
             let _eval_guard = ScopeGuard::new(
-                &self.runtime.handler,
+                &*self.handler,
                 ScopedEvent::new(ScopedEventKind::Eval(memo_id)),
             );
             (ops.eval)(self, args)
         };
-        let out = (ops.store_output)(&self.runtime.storage, &self.runtime.handler, out.as_ref());
+        let out = (ops.store_output)(&self.runtime.storage, &*self.handler, out.as_ref());
         let mut commit = PendingCommit::new(current_rev, memo_id);
         if self.runtime.memos.value_id(memo_id) != Some(out) {
             commit.new_value_id = Some(out);
@@ -800,7 +814,7 @@ impl<S, H> Runtime<S, H>
 where
     S: Storage,
 {
-    fn gc(&mut self, inputs: &mut InputRegistry<S, H>)
+    fn gc(&mut self, handler: &H, inputs: &mut InputRegistry<S, H>)
     where
         H: Handler<S>,
     {
@@ -808,10 +822,8 @@ where
             storage,
             memos,
             query_ops,
-            handler,
             rev: _,
         } = self;
-        let _gc_guard = ScopeGuard::new(handler, ScopedEvent::new(ScopedEventKind::Gc));
         let input_count = inputs.len();
         let mut storage_transfer = storage.transfer();
         let mut memos_transfer = memos.transfer(input_count);
@@ -848,7 +860,6 @@ where
             storage: S::default(),
             memos: Memos::default(),
             query_ops: QueryOpsRegistry::default(),
-            handler: H::default(),
         }
     }
 }
