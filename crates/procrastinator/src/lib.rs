@@ -687,7 +687,7 @@ where
         let query_id = QueryId::of::<Q>();
         let _query_guard = ScopeGuard::new(
             &self.runtime.handler,
-            ScopedEvent::new(ScopedEventKind::Query),
+            ScopedEvent::new(ScopedEventKind::Query(query_id)),
         );
         self.runtime
             .query_ops
@@ -739,7 +739,7 @@ where
         let out = {
             let _eval_guard = ScopeGuard::new(
                 &self.runtime.handler,
-                ScopedEvent::new(ScopedEventKind::Eval),
+                ScopedEvent::new(ScopedEventKind::Eval(memo_id.query_id())),
             );
             (ops.eval)(self, args)
         };

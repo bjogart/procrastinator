@@ -90,7 +90,7 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 ///     fn event(&self, _event: Event<S>) {}
 ///
 ///     fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
-///         if let ScopedEventKind::Query = event.kind {
+///         if let ScopedEventKind::Query(_) = event.kind {
 ///             self.queries.fetch_add(1, Ordering::Relaxed);
 ///         }
 ///     }
@@ -229,8 +229,8 @@ where
     ///
     ///     fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
     ///         match event.kind {
-    ///             ScopedEventKind::Eval => Some(Instant::now()),
-    ///             ScopedEventKind::Query => None,
+    ///             ScopedEventKind::Eval(_) => Some(Instant::now()),
+    ///             ScopedEventKind::Query(_) => None,
     ///         }
     ///     }
     ///
@@ -344,12 +344,12 @@ pub enum ScopedEventKind {
     ///
     /// The scope covers the whole call: checking whether the memoized output is
     /// up to date, and evaluating the query if it is not.
-    Query,
+    Query(QueryId),
     /// An evaluation of [`Query::eval`](crate::query::Query::eval).
     ///
     /// This scope is always nested inside a [`ScopedEventKind::Query`] scope,
     /// and it is only entered if the memoized output could not be reused.
-    Eval,
+    Eval(QueryId),
 }
 
 /// Enters a scope on creation and exits it when dropped.

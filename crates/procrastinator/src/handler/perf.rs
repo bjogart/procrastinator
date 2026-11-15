@@ -125,8 +125,8 @@ where
 
     fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
         match event.kind {
-            ScopedEventKind::Query => self.query_count.fetch_add(1, Ordering::Relaxed),
-            ScopedEventKind::Eval => self.eval_count.fetch_add(1, Ordering::Relaxed),
+            ScopedEventKind::Query(_) => self.query_count.fetch_add(1, Ordering::Relaxed),
+            ScopedEventKind::Eval(_) => self.eval_count.fetch_add(1, Ordering::Relaxed),
         };
         (event.kind, Instant::now())
     }
@@ -135,8 +135,8 @@ where
         let (kind, start) = payload;
         let elapsed = start.elapsed();
         match kind {
-            ScopedEventKind::Query => self.query_time.add(elapsed),
-            ScopedEventKind::Eval => self.eval_time.add(elapsed),
+            ScopedEventKind::Query(_) => self.query_time.add(elapsed),
+            ScopedEventKind::Eval(_) => self.eval_time.add(elapsed),
         }
     }
 }
