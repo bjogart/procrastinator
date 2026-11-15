@@ -187,8 +187,14 @@ impl<S> MemosTransfer<'_, S>
 where
     S: Storage,
 {
-    pub(crate) fn transfer<F>(&mut self, memo_id: MemoId<S>, transfer: F) -> MemoId<S>
+    pub(crate) fn transfer<H, F>(
+        &mut self,
+        handler: &H,
+        memo_id: MemoId<S>,
+        transfer: F,
+    ) -> MemoId<S>
     where
+        H: Handler<S>,
         F: FnOnce(S::Id) -> (MemoId<S>, S::Id),
     {
         let (last_verified, last_changed, value_id) = {
@@ -221,6 +227,12 @@ where
                 value_id: Some(next_value_id),
             }),
         );
+        // `handler.event` could panic, but we only hold a read lock on the
+        // current memos, which cannot be poisoned.
+        handler.event(Event::new(EventKind::TransferMemo {
+            from: memo_id,
+            to: next_memo_id,
+        }));
         next_memo_id
     }
 

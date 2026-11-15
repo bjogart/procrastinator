@@ -307,11 +307,21 @@ where
     /// A memo holds the memoized output of one query for one set of arguments.
     /// Every input also has a memo, which holds its value.
     RegisterMemo(MemoId<S>),
+    /// A memo was kept by [`Db::gc`](crate::Db::gc) and given a new ID.
+    ///
+    /// Garbage collection keeps only the memos of inputs. A kept memo's
+    /// arguments may move to a new storage ID, which changes its [`MemoId`].
+    /// This event fires for every kept memo, even if its ID did not change.
+    TransferMemo {
+        /// The ID that formerly referred to this memo.
+        from: MemoId<S>,
+        /// The ID that currently refers to this memo.
+        to: MemoId<S>,
+    },
     /// [`Db::gc`](crate::Db::gc) removed a memo.
     ///
-    /// Garbage collection keeps only the memos of inputs. The ID of a kept memo
-    /// may change as its arguments move to a new storage ID (see [`MemoId`]),
-    /// but this is not a removal and does not trigger this event.
+    /// Garbage collection removes all memos except those that belong to inputs.
+    /// Input memos trigger [`EventKind::TransferMemo`] instead.
     DeregisterMemo(MemoId<S>),
 }
 

@@ -207,9 +207,9 @@ where
 /// [`EventKind::RegisterMemo`](handler::EventKind::RegisterMemo).
 ///
 /// A memo ID is only meaningful for the database that created it. When
-/// [`Db::gc`] keeps a memo, its arguments may move to a new storage ID (see
-/// [`EventKind::TransferValue`](handler::EventKind::TransferValue)), which
-/// adjusts the memo ID also.
+/// [`Db::gc`] keeps a memo, its arguments may move to a new storage ID, which
+/// adjusts the memo ID also. The handler is then notified with
+/// [`EventKind::TransferMemo`](handler::EventKind::TransferMemo).
 ///
 /// # Examples
 ///
@@ -813,7 +813,7 @@ where
         let next_inputs = inputs.transfer(|input| {
             let memo_id = input.memo_id();
             input_queries.insert(memo_id.query_id);
-            memos_transfer.transfer(memo_id, |value_id| {
+            memos_transfer.transfer(handler, memo_id, |value_id| {
                 input.transfer(handler, &mut storage_transfer, value_id)
             })
         });
