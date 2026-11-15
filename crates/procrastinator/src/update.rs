@@ -1,8 +1,8 @@
 use crate::ActiveQuery;
 use crate::ActiveQueryStack;
+use crate::MemoId;
 use crate::Revision;
 use crate::Snapshot;
-use crate::memo::MemoId;
 use crate::memo::Memos;
 use crate::storage::Storage;
 

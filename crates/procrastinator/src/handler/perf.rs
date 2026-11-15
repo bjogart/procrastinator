@@ -14,6 +14,7 @@ use core::time::Duration;
 use std::time::Instant;
 
 use crate::handler::Handler as HandlerTrait;
+use crate::storage::Storage;
 
 /// A handler that counts and times database operations.
 ///
@@ -54,7 +55,7 @@ use crate::handler::Handler as HandlerTrait;
 ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, width: &Self::Args) -> Self::Out
 ///     where
 ///         S: Storage,
-///         H: Handler,
+///         H: Handler<S>,
 ///     {
 ///         let width = *snapshot.query::<Width>(width);
 ///         width * width
@@ -92,37 +93,47 @@ struct AtomicDuration {
     ns: AtomicU64,
 }
 
-impl HandlerTrait for Handler {
-    type Payload = (ScopedEventKind, Instant);
+impl<S> HandlerTrait<S> for Handler
+where
+    S: Storage,
+{
+    type Payload = (ScopedEventKind<S>, Instant);
 
-    fn event(&self, event: Event) {
+    fn event(&self, event: Event<S>) {
         match event.kind {
-            EventKind::RegisterQueryOps => {
+            EventKind::RegisterQueryOps(_) => {
                 self.registered_query_ops.fetch_add(1, Ordering::Relaxed);
             }
-            EventKind::DeregisterQueryOps => {
+            EventKind::DeregisterQueryOps(_) => {
                 self.registered_query_ops.fetch_sub(1, Ordering::Relaxed);
             }
-            EventKind::StoreValue => {
+            EventKind::StoreValue(_) => {
                 self.stored_values.fetch_add(1, Ordering::Relaxed);
             }
-            EventKind::FreeValues(count) => {
-                self.stored_values.fetch_sub(count, Ordering::Relaxed);
+            EventKind::FreeValue(_) => {
+                self.stored_values.fetch_sub(1, Ordering::Relaxed);
             }
-            EventKind::RegisterMemo => {
+            EventKind::RegisterMemo(_) => {
                 self.memo_count.fetch_add(1, Ordering::Relaxed);
             }
-            EventKind::DeregisterMemos(n) => {
-                self.memo_count.fetch_sub(n, Ordering::Relaxed);
+            EventKind::DeregisterMemo(_) => {
+                self.memo_count.fetch_sub(1, Ordering::Relaxed);
             }
+            EventKind::TransferValue { .. } | EventKind::TransferMemo { .. } => {}
         }
     }
 
-    fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
+    fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload {
         match event.kind {
-            ScopedEventKind::Query => self.query_count.fetch_add(1, Ordering::Relaxed),
-            ScopedEventKind::Eval => self.eval_count.fetch_add(1, Ordering::Relaxed),
-        };
+            ScopedEventKind::Query(_) => {
+                self.query_count.fetch_add(1, Ordering::Relaxed);
+            }
+            ScopedEventKind::Eval(_) => {
+                self.eval_count.fetch_add(1, Ordering::Relaxed);
+            }
+            ScopedEventKind::SetInput(_) | ScopedEventKind::Gc | ScopedEventKind::WaitExclusive => {
+            }
+        }
         (event.kind, Instant::now())
     }
 
@@ -130,8 +141,10 @@ impl HandlerTrait for Handler {
         let (kind, start) = payload;
         let elapsed = start.elapsed();
         match kind {
-            ScopedEventKind::Query => self.query_time.add(elapsed),
-            ScopedEventKind::Eval => self.eval_time.add(elapsed),
+            ScopedEventKind::Query(_) => self.query_time.add(elapsed),
+            ScopedEventKind::Eval(_) => self.eval_time.add(elapsed),
+            ScopedEventKind::SetInput(_) | ScopedEventKind::Gc | ScopedEventKind::WaitExclusive => {
+            }
         }
     }
 }

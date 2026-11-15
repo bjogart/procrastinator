@@ -1,16 +1,14 @@
 use crate::INCONSISTENT_STATE;
+use crate::MemoId;
+use crate::QueryId;
 use crate::Revision;
 use crate::handler::Event;
 use crate::handler::EventKind;
 use crate::handler::Handler;
-use crate::query_ops::QueryId;
 use crate::storage::Storage;
-use core::fmt;
 use core::fmt::Debug;
-use core::fmt::Formatter;
-use core::hash::Hash;
-use core::hash::Hasher;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::sync::RwLock;
 use std::sync::RwLockReadGuard;
@@ -30,17 +28,10 @@ where
 {
     curr: RwLockReadGuard<'memos, MemoMap<S>>,
     next: MemoMap<S>,
+    transferred_ids: HashSet<MemoId<S>>,
 }
 
 type MemoMap<S> = HashMap<MemoId<S>, RwLock<MemoEntry<S>>>;
-
-pub(crate) struct MemoId<S>
-where
-    S: Storage,
-{
-    pub(crate) query_id: QueryId,
-    pub(crate) args_id: S::Id,
-}
 
 #[derive(Debug)]
 pub(crate) struct MemoEntry<S>
@@ -66,15 +57,15 @@ where
         value_id: S::Id,
     ) -> MemoId<S>
     where
-        H: Handler,
+        H: Handler<S>,
     {
-        let memo_id = MemoId { query_id, args_id };
+        let memo_id = MemoId::new(query_id, args_id);
         let mut entry = MemoEntry::new();
         entry.value_id = Some(value_id);
         entry.last_verified = rev;
         entry.last_changed = rev;
 
-        handler.event(Event::new(EventKind::RegisterMemo));
+        handler.event(Event::new(EventKind::RegisterMemo(memo_id)));
         self.0
             .write()
             .expect(INCONSISTENT_STATE)
@@ -85,9 +76,9 @@ where
 
     pub(crate) fn memo_id<H>(&self, handler: &H, query_id: QueryId, args_id: S::Id) -> MemoId<S>
     where
-        H: Handler,
+        H: Handler<S>,
     {
-        let memo_id = MemoId { query_id, args_id };
+        let memo_id = MemoId::new(query_id, args_id);
         let did_insert = match self.0.write().expect(INCONSISTENT_STATE).entry(memo_id) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
@@ -98,7 +89,7 @@ where
         // Database insertion must be finished before the handler is notified as
         // the handler may panic and poison the memo map lock.
         if did_insert {
-            handler.event(Event::new(EventKind::RegisterMemo));
+            handler.event(Event::new(EventKind::RegisterMemo(memo_id)));
         }
         memo_id
     }
@@ -183,14 +174,11 @@ where
         memo.value_id = Some(value_id);
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.0.read().expect(INCONSISTENT_STATE).len()
-    }
-
     pub(crate) fn transfer(&self, capacity: usize) -> MemosTransfer<'_, S> {
         MemosTransfer {
             curr: self.0.read().expect(INCONSISTENT_STATE),
             next: HashMap::with_capacity(capacity),
+            transferred_ids: HashSet::with_capacity(capacity),
         }
     }
 }
@@ -199,8 +187,14 @@ impl<S> MemosTransfer<'_, S>
 where
     S: Storage,
 {
-    pub(crate) fn retain<F>(&mut self, memo_id: MemoId<S>, transfer: F) -> MemoId<S>
+    pub(crate) fn transfer<H, F>(
+        &mut self,
+        handler: &H,
+        memo_id: MemoId<S>,
+        transfer: F,
+    ) -> MemoId<S>
     where
+        H: Handler<S>,
         F: FnOnce(S::Id) -> (MemoId<S>, S::Id),
     {
         let (last_verified, last_changed, value_id) = {
@@ -223,6 +217,7 @@ where
             (*last_verified, *last_changed, value_id)
         };
         let (next_memo_id, next_value_id) = transfer(value_id);
+        self.transferred_ids.insert(memo_id);
         self.next.insert(
             next_memo_id,
             RwLock::new(MemoEntry {
@@ -232,14 +227,29 @@ where
                 value_id: Some(next_value_id),
             }),
         );
+        // `handler.event` could panic, but we only hold a read lock on the
+        // current memos, which cannot be poisoned.
+        handler.event(Event::new(EventKind::TransferMemo {
+            from: memo_id,
+            to: next_memo_id,
+        }));
         next_memo_id
     }
 
-    pub(crate) fn into_memos(self) -> Memos<S> {
-        let next = {
-            let Self { next, curr: _curr } = self;
-            next
-        };
+    pub(crate) fn into_memos<H>(self, handler: &H) -> Memos<S>
+    where
+        H: Handler<S>,
+    {
+        let Self {
+            curr,
+            next,
+            transferred_ids,
+        } = self;
+        for &memo_id in curr.keys() {
+            if !transferred_ids.contains(&memo_id) {
+                handler.event(Event::new(EventKind::DeregisterMemo(memo_id)));
+            }
+        }
         Memos(RwLock::new(next))
     }
 }
@@ -264,53 +274,5 @@ where
             last_changed: Revision::NEVER_VERIFIED,
             value_id: None,
         }
-    }
-}
-
-impl<S> Clone for MemoId<S>
-where
-    S: Storage,
-{
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<S> Copy for MemoId<S> where S: Storage {}
-
-impl<S> PartialEq for MemoId<S>
-where
-    S: Storage,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.query_id == other.query_id && self.args_id == other.args_id
-    }
-}
-
-impl<S> Eq for MemoId<S> where S: Storage {}
-
-impl<S> Hash for MemoId<S>
-where
-    S: Storage,
-{
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: Hasher,
-    {
-        self.query_id.hash(state);
-        self.args_id.hash(state);
-    }
-}
-
-impl<S> Debug for MemoId<S>
-where
-    S: Storage,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let Self { query_id, args_id } = self;
-        f.debug_struct("MemoId")
-            .field("query_id", query_id)
-            .field("args_id", args_id)
-            .finish()
     }
 }

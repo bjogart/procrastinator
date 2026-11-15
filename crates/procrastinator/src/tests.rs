@@ -792,7 +792,7 @@ impl Query for BurritoPriceWithShipping {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         *snapshot.query::<BurritoPrice>(args) + 2
     }
@@ -811,7 +811,7 @@ impl Query for TotalPrice {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         let (price, count) = args;
         *snapshot.query::<BurritoPriceWithShipping>(price) * *snapshot.query::<BurritoCount>(count)
@@ -826,7 +826,7 @@ impl Query for PriceWithVat {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         (*snapshot.query::<TotalPrice>(args)) + 5
     }
@@ -845,7 +845,7 @@ impl Query for SalsaInOrder {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         let (burrito_salsa, count) = args;
         *snapshot.query::<BurritoCount>(count) * *snapshot.query::<SalsaPerBurrito>(burrito_salsa)
@@ -870,7 +870,7 @@ impl Query for DeliveryCost {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         let (pickup, fee) = args;
         if *snapshot.query::<IsPickup>(pickup) {
@@ -893,7 +893,7 @@ impl Query for DeliveredBurritoPrice {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         let (price, pickup, fee) = args;
         *snapshot.query::<BurritoPrice>(price) + *snapshot.query::<DeliveryCost>(&(*pickup, *fee))
@@ -908,7 +908,7 @@ impl Query for SalsaCupGrams {
     fn eval<S, H>(_: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         args * 40
     }
@@ -947,7 +947,7 @@ impl Query for FragileTotalPrice {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         let (price, count) = args;
         *snapshot.query::<BurritoPriceWithShipping>(price) * snapshot.query::<FragileCount>(count).0
@@ -966,7 +966,7 @@ impl Query for FlakyTotalPrice {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         let (price, count) = args;
         let price = *snapshot.query::<BurritoPrice>(price);
@@ -983,7 +983,7 @@ impl Query for FlakyPriceWithVat {
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         *snapshot.query::<FlakyTotalPrice>(args) + 5
     }

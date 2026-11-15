@@ -2,12 +2,10 @@
 
 extern crate alloc;
 
-use crate::handler::Event;
 use crate::handler::Handler;
 use crate::handler::ScopeGuard;
 use crate::handler::ScopedEvent;
 use crate::handler::ScopedEventKind;
-use crate::memo::MemoId;
 use crate::memo::Memos;
 use crate::query::Input;
 use crate::query::InputId;
@@ -21,8 +19,13 @@ use crate::storage::Transfer as _;
 use crate::storage::default::Storage as DefaultStorage;
 use crate::update::PendingCommit;
 use crate::update::QueryUpdate;
+use alloc::sync::Arc;
+use core::any::TypeId;
 use core::any::type_name;
 use core::cell::RefCell;
+use core::fmt;
+use core::hash::Hash;
+use core::hash::Hasher;
 use core::mem;
 use std::collections::HashSet;
 
@@ -49,7 +52,7 @@ pub(crate) const INCONSISTENT_STATE: &str = "bug: database in inconsistent state
 /// internal events:
 ///
 /// - `S` is the [`Storage`] that holds argument and output values. The
-///   default storage hands out query results as [`Arc`](alloc::sync::Arc)s.
+///   default storage hands out query results as [`Arc`]s.
 /// - `H` is the [`Handler`] that receives events, for example for profiling.
 ///   The default, `()`, ignores all events.
 ///
@@ -77,7 +80,7 @@ pub(crate) const INCONSISTENT_STATE: &str = "bug: database in inconsistent state
 ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, width: &Self::Args) -> Self::Out
 ///     where
 ///         S: Storage,
-///         H: Handler,
+///         H: Handler<S>,
 ///     {
 ///         let width = *snapshot.query::<Width>(width);
 ///         width * width
@@ -102,9 +105,11 @@ pub(crate) const INCONSISTENT_STATE: &str = "bug: database in inconsistent state
 pub struct Db<S = DefaultStorage, H = ()>
 where
     S: Storage,
+    H: Handler<S>,
 {
     runtime: Shared<Runtime<S, H>>,
-    inputs: InputRegistry<S>,
+    inputs: InputRegistry<S, H>,
+    handler: Arc<H>,
 }
 
 /// A read-only view of a [`Db`], used to run queries.
@@ -158,6 +163,7 @@ where
 {
     runtime: Shared<Runtime<S, H>>,
     active_queries: RefCell<ActiveQueryStack<S>>,
+    handler: Arc<H>,
 }
 
 #[derive(Debug)]
@@ -169,7 +175,6 @@ where
     storage: S,
     memos: Memos<S>,
     query_ops: QueryOpsRegistry<S, H>,
-    handler: H,
 }
 
 #[derive(Debug)]
@@ -195,9 +200,159 @@ where
     deps: Vec<MemoId<S>>,
 }
 
+/// An opaque value that uniquely identifies a memo.
+///
+/// A memo holds the memoized output of one query for one set of arguments, so
+/// its ID is a pair of a [`QueryId`] and the storage ID of the arguments. For
+/// an input, the arguments are its [`InputId`]. Memo IDs implement `Eq` and
+/// `Hash`, and are handed to a [`Handler`] in
+/// [`EventKind::RegisterMemo`](handler::EventKind::RegisterMemo).
+///
+/// A memo ID is only meaningful for the database that created it. When
+/// [`Db::gc`] keeps a memo, its arguments may move to a new storage ID, which
+/// adjusts the memo ID also. The handler is then notified with
+/// [`EventKind::TransferMemo`](handler::EventKind::TransferMemo).
+///
+/// # Examples
+///
+/// A handler that records the ID of every memo that is created:
+///
+/// ```
+/// use procrastinator::Db;
+/// use procrastinator::MemoId;
+/// use procrastinator::QueryId;
+/// use procrastinator::Snapshot;
+/// use procrastinator::handler::Event;
+/// use procrastinator::handler::EventKind;
+/// use procrastinator::handler::Handler;
+/// use procrastinator::handler::ScopedEvent;
+/// use procrastinator::query::Input;
+/// use procrastinator::query::InputId;
+/// use procrastinator::query::Query;
+/// use procrastinator::storage::Storage;
+/// use procrastinator::storage::default;
+/// use std::sync::Mutex;
+///
+/// #[derive(Default)]
+/// struct MemoLog {
+///     memos: Mutex<Vec<MemoId<default::Storage>>>,
+/// }
+///
+/// impl Handler<default::Storage> for MemoLog {
+///     type Payload = ();
+///
+///     fn event(&self, event: Event<default::Storage>) {
+///         if let EventKind::RegisterMemo(memo_id) = event.kind {
+///             self.memos.lock().unwrap().push(memo_id);
+///         }
+///     }
+///
+///     fn enter_scope(&self, _event: ScopedEvent<default::Storage>) -> Self::Payload {}
+///
+///     fn exit_scope(&self, (): Self::Payload) {}
+/// }
+///
+/// struct Width;
+/// impl Input for Width {
+///     type Value = u32;
+/// }
+///
+/// struct Area;
+/// impl Query for Area {
+///     type Args = InputId<Width>;
+///     type Out = u32;
+///
+///     fn eval<S, H>(snapshot: &Snapshot<S, H>, width: &Self::Args) -> Self::Out
+///     where
+///         S: Storage,
+///         H: Handler<S>,
+///     {
+///         let width = *snapshot.query::<Width>(width);
+///         width * width
+///     }
+/// }
+///
+/// let mut db: Db<default::Storage, MemoLog> = Db::default();
+/// let small = db.new_input::<Width>(&3);
+/// let large = db.new_input::<Width>(&300);
+/// let snapshot = db.snapshot();
+/// snapshot.query::<Area>(&small);
+/// // Calling a query again with equal arguments reuses its memo.
+/// snapshot.query::<Area>(&small);
+/// snapshot.query::<Area>(&large);
+///
+/// let memos = snapshot.event_handler().memos.lock().unwrap();
+/// let area_memos: Vec<_> = memos
+///     .iter()
+///     .filter(|memo_id| memo_id.query_id() == QueryId::of::<Area>())
+///     .collect();
+/// // One memo per set of arguments: the IDs share a query but not arguments.
+/// assert_eq!(area_memos.len(), 2);
+/// assert_ne!(area_memos[0].args_id(), area_memos[1].args_id());
+/// ```
+pub struct MemoId<S>
+where
+    S: Storage,
+{
+    query_id: QueryId,
+    args_id: S::Id,
+}
+
+/// An opaque value that uniquely identifies a query.
+///
+/// Within a single build, a query will always be assigned the same ID. IDs
+/// identify the query type and implement `Eq` and `Hash`. However, IDs are not
+/// guaranteed to be the same across builds.
+///
+/// # Examples
+///
+/// ```
+/// use procrastinator::handler::Handler;
+/// use procrastinator::query::Query;
+/// use procrastinator::QueryId;
+/// use procrastinator::Snapshot;
+/// use procrastinator::storage::Storage;
+///
+/// struct Shout;
+/// impl Query for Shout {
+///     type Args = String;
+///     type Out = String;
+///
+///     fn eval<S, H>(_snapshot: &Snapshot<S, H>, text: &Self::Args) -> Self::Out
+///     where
+///         S: Storage,
+///         H: Handler<S>,
+///     {
+///         text.to_uppercase()
+///     }
+/// }
+///
+/// struct Whisper;
+/// impl Query for Whisper {
+///     type Args = String;
+///     type Out = String;
+///
+///     fn eval<S, H>(_snapshot: &Snapshot<S, H>, text: &Self::Args) -> Self::Out
+///     where
+///         S: Storage,
+///         H: Handler<S>,
+///     {
+///         text.to_lowercase()
+///     }
+/// }
+///
+/// assert_eq!(QueryId::of::<Shout>(), QueryId::of::<Shout>());
+/// assert_eq!(QueryId::of::<Whisper>(), QueryId::of::<Whisper>());
+/// // Query IDs of different queries compare unequal.
+/// assert_ne!(QueryId::of::<Shout>(), QueryId::of::<Whisper>());
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct QueryId(TypeId);
+
 impl<S, H> Db<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     /// Returns the event handler of this database.
     ///
@@ -225,7 +380,7 @@ where
     /// ```
     #[must_use]
     pub fn event_handler(&self) -> &H {
-        &self.runtime.handler
+        &self.handler
     }
 
     /// Creates a new input with the given initial value.
@@ -267,30 +422,29 @@ where
     /// and the database stays usable.
     pub fn new_input<I>(&mut self, value: &I::Value) -> InputId<I>
     where
-        H: Handler,
+        H: Handler<S>,
         I: Input,
     {
         let rev = self.runtime.rev.get();
-        let query_id = self.runtime.query_ops.query_id::<I>(&self.runtime.handler);
-        let value_id = self.runtime.storage.store(&self.runtime.handler, value);
+        let query_id = QueryId::of::<I>();
+        self.runtime
+            .query_ops
+            .query_id::<I>(&*self.handler, query_id);
+        let value_id = self.runtime.storage.store(&*self.handler, value);
         self.inputs.new_input(|input_id| {
-            let dummy_args_id = self.runtime.storage.store(&self.runtime.handler, &input_id);
-            self.runtime.memos.new_input(
-                &self.runtime.handler,
-                rev,
-                query_id,
-                dummy_args_id,
-                value_id,
-            )
+            let dummy_args_id = self.runtime.storage.store(&*self.handler, &input_id);
+            self.runtime
+                .memos
+                .new_input(&*self.handler, rev, query_id, dummy_args_id, value_id)
         })
     }
 
     /// Replaces the value of an input with another value.
     ///
-    /// Queries that depend on the input, directly or through other queries,
-    /// are re-evaluated the next time they are called. Nothing is evaluated
-    /// right away. If the new value is equal to the current one, all memoized
-    /// results stay valid.
+    /// Queries that depend on the input, directly or through other queries, are
+    /// re-evaluated the next time they are called. Nothing is evaluated right
+    /// away. If the new value is equal to the current one, all memoized results
+    /// stay valid.
     ///
     /// # Examples
     ///
@@ -314,27 +468,38 @@ where
     /// # Blocking
     ///
     /// This method blocks until every [`Snapshot`] of this database has been
-    /// dropped. Calling it while the current thread holds a snapshot
-    /// deadlocks.
+    /// dropped. Calling it while the current thread holds a snapshot deadlocks.
     ///
     /// # Panics
     ///
     /// Panics if the [`Clone`], [`Eq`], or [`Hash`] implementation of the
-    /// value, or the event handler panics. The panic propagates to the
-    /// caller, and the database stays usable: the input keeps its previous
-    /// value.
+    /// value, or the event handler panics. The panic propagates to the caller,
+    /// and the database stays usable: the input keeps its previous value. The
+    /// exception is a panic in [`Handler::exit_scope`] for the
+    /// [`ScopedEventKind::SetInput`] scope, which happens after the new value
+    /// was set.
     ///
     /// Passing an `input_id` that was created by a different `Db` is a logic
     /// error. It may panic now, panic later, or silently change an unrelated
     /// input.
     pub fn set_input<I>(&mut self, input_id: InputId<I>, value: &I::Value)
     where
-        H: Handler,
+        H: Handler<S>,
         I: Input,
     {
-        let runtime = self.runtime.wait_exclusive();
         let memo_id = self.inputs.memo_id(input_id);
-        let new_value_id = runtime.storage.store(&runtime.handler, value);
+        let _set_input_guard = ScopeGuard::new(
+            &*self.handler,
+            ScopedEvent::new(ScopedEventKind::SetInput(memo_id)),
+        );
+        let runtime = {
+            let _wait_guard = ScopeGuard::new(
+                &*self.handler,
+                ScopedEvent::new(ScopedEventKind::WaitExclusive),
+            );
+            self.runtime.wait_exclusive()
+        };
+        let new_value_id = runtime.storage.store(&*self.handler, value);
         if runtime.memos.value_id(memo_id) != Some(new_value_id) {
             let current_rev = runtime.rev.bump();
             runtime.memos.set_input(memo_id, current_rev, new_value_id);
@@ -375,7 +540,7 @@ where
     /// that mutates the `Db`.
     #[must_use]
     pub fn snapshot(&self) -> Snapshot<S, H> {
-        Snapshot::new(self.runtime.clone())
+        Snapshot::new(self.runtime.clone(), Arc::clone(&self.handler))
     }
 
     /// Frees all memoized query results.
@@ -398,21 +563,30 @@ where
     /// The panic propagates to the caller, and the database stays usable.
     pub fn gc(&mut self)
     where
-        H: Handler,
+        H: Handler<S>,
     {
-        self.runtime.wait_exclusive().gc(&mut self.inputs);
+        let _gc_guard = ScopeGuard::new(&*self.handler, ScopedEvent::new(ScopedEventKind::Gc));
+        let runtime = {
+            let _wait_guard = ScopeGuard::new(
+                &*self.handler,
+                ScopedEvent::new(ScopedEventKind::WaitExclusive),
+            );
+            self.runtime.wait_exclusive()
+        };
+        runtime.gc(&self.handler, &mut self.inputs);
     }
 }
 
 impl<S, H> Default for Db<S, H>
 where
     S: Storage,
-    H: Default,
+    H: Handler<S>,
 {
     fn default() -> Self {
         Self {
             runtime: Shared::default(),
             inputs: InputRegistry::default(),
+            handler: Arc::default(),
         }
     }
 }
@@ -421,9 +595,10 @@ impl<S, H> Snapshot<S, H>
 where
     S: Storage,
 {
-    fn new(runtime: Shared<Runtime<S, H>>) -> Self {
+    fn new(runtime: Shared<Runtime<S, H>>, handler: Arc<H>) -> Self {
         Self {
             runtime,
+            handler,
             active_queries: RefCell::default(),
         }
     }
@@ -456,7 +631,7 @@ where
     /// ```
     #[must_use]
     pub fn event_handler(&self) -> &H {
-        &self.runtime.handler
+        &self.handler
     }
 
     /// Runs query `Q` with the given arguments and returns a handle to its
@@ -472,7 +647,7 @@ where
     /// a dependency of the calling query.
     ///
     /// The returned handle dereferences to `Q::Out`. With the default
-    /// [`Storage`], the handle is an [`Arc`](alloc::sync::Arc).
+    /// [`Storage`], the handle is an [`Arc`].
     ///
     /// # Examples
     ///
@@ -498,7 +673,7 @@ where
     ///     fn eval<S, H>(snapshot: &Snapshot<S, H>, name: &Self::Args) -> Self::Out
     ///     where
     ///         S: Storage,
-    ///         H: Handler,
+    ///         H: Handler<S>,
     ///     {
     ///         // `Name` becomes a dependency of `Greet`. Inside `eval`, the
     ///         // storage is generic, so the handle is only known to implement
@@ -525,19 +700,22 @@ where
     /// error. It may panic, or return the value of an unrelated input.
     pub fn query<Q>(&self, args: &Q::Args) -> <S::Handle as Handle>::TypedHandle<Q::Out>
     where
-        H: Handler,
+        H: Handler<S>,
         Q: Query,
     {
+        let query_id = QueryId::of::<Q>();
         let _query_guard = ScopeGuard::new(
-            &self.runtime.handler,
-            ScopedEvent::new(ScopedEventKind::Query),
+            &*self.handler,
+            ScopedEvent::new(ScopedEventKind::Query(query_id)),
         );
-        let query_id = self.runtime.query_ops.query_id::<Q>(&self.runtime.handler);
-        let args_id = self.runtime.storage.store(&self.runtime.handler, args);
+        self.runtime
+            .query_ops
+            .query_id::<Q>(&*self.handler, query_id);
+        let args_id = self.runtime.storage.store(&*self.handler, args);
         let memo_id = self
             .runtime
             .memos
-            .memo_id(&self.runtime.handler, query_id, args_id);
+            .memo_id(&*self.handler, query_id, args_id);
         self.track_dep(memo_id);
         self.verify_memo(self.runtime.rev.get(), memo_id);
         let value_id = self.memoized_value_id(memo_id);
@@ -546,7 +724,7 @@ where
 
     fn verify_memo(&self, current_rev: Revision, memo_id: MemoId<S>)
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let (last_verified, deps) = {
             let (last_verified, deps) = self.runtime.memos.verification(memo_id);
@@ -568,23 +746,23 @@ where
 
     fn eval_memo(&self, current_rev: Revision, memo_id: MemoId<S>)
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let ops = self
             .runtime
             .query_ops
-            .get(memo_id.query_id)
+            .get(memo_id.query_id())
             .expect("bug: query not registered");
-        let args = self.runtime.storage.get(memo_id.args_id);
+        let args = self.runtime.storage.get(memo_id.args_id());
         let mut query_update = self.install_query();
         let out = {
             let _eval_guard = ScopeGuard::new(
-                &self.runtime.handler,
-                ScopedEvent::new(ScopedEventKind::Eval),
+                &*self.handler,
+                ScopedEvent::new(ScopedEventKind::Eval(memo_id)),
             );
             (ops.eval)(self, args)
         };
-        let out = (ops.store_output)(&self.runtime.storage, &self.runtime.handler, out.as_ref());
+        let out = (ops.store_output)(&self.runtime.storage, &*self.handler, out.as_ref());
         let mut commit = PendingCommit::new(current_rev, memo_id);
         if self.runtime.memos.value_id(memo_id) != Some(out) {
             commit.new_value_id = Some(out);
@@ -599,7 +777,7 @@ where
         dep: MemoId<S>,
     ) -> bool
     where
-        H: Handler,
+        H: Handler<S>,
     {
         self.verify_memo(current_rev, dep);
         self.runtime.memos.last_changed(dep) > memo_last_verified
@@ -607,7 +785,7 @@ where
 
     fn install_query(&self) -> QueryUpdate<'_, S, H>
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let mut active_queries = self.active_queries.borrow_mut();
         let ActiveQueryStack(active_queries) = &mut *active_queries;
@@ -636,15 +814,14 @@ impl<S, H> Runtime<S, H>
 where
     S: Storage,
 {
-    fn gc(&mut self, inputs: &mut InputRegistry<S>)
+    fn gc(&mut self, handler: &H, inputs: &mut InputRegistry<S, H>)
     where
-        H: Handler,
+        H: Handler<S>,
     {
         let Self {
             storage,
             memos,
             query_ops,
-            handler,
             rev: _,
         } = self;
         let input_count = inputs.len();
@@ -654,24 +831,20 @@ where
         let next_inputs = inputs.transfer(|input| {
             let memo_id = input.memo_id();
             input_queries.insert(memo_id.query_id);
-            memos_transfer.retain(memo_id, |value_id| {
-                input.transfer(&mut storage_transfer, value_id)
+            memos_transfer.transfer(handler, memo_id, |value_id| {
+                input.transfer(handler, &mut storage_transfer, value_id)
             })
         });
-        let next_memos = memos_transfer.into_memos();
+        let next_memos = memos_transfer.into_memos(handler);
         let next_storage = storage_transfer.into_storage(handler);
 
-        let prev_memos = {
+        {
             // Replace everything first before dropping collected values, since
             // Drop implementations can panic.
             let _prev_inputs = mem::replace(inputs, next_inputs);
             let _prev_storage = mem::replace(storage, next_storage);
-            mem::replace(memos, next_memos)
-        };
-
-        handler.event(Event::new(handler::EventKind::DeregisterMemos(
-            prev_memos.len().saturating_sub(memos.len()),
-        )));
+            let _prev_memos = mem::replace(memos, next_memos);
+        }
         query_ops.retain(handler, |query_id| input_queries.contains(&query_id));
     }
 }
@@ -679,7 +852,7 @@ where
 impl<S, H> Default for Runtime<S, H>
 where
     S: Storage,
-    H: Default,
+    H: Handler<S>,
 {
     fn default() -> Self {
         Self {
@@ -687,7 +860,6 @@ where
             storage: S::default(),
             memos: Memos::default(),
             query_ops: QueryOpsRegistry::default(),
-            handler: H::default(),
         }
     }
 }
@@ -709,6 +881,94 @@ where
         Self {
             deps: Vec::default(),
         }
+    }
+}
+
+impl<S> MemoId<S>
+where
+    S: Storage,
+{
+    pub(crate) fn new(query_id: QueryId, args_id: S::Id) -> Self {
+        Self { query_id, args_id }
+    }
+
+    /// Returns the ID of the query this memo belongs to.
+    ///
+    /// Compare it with [`QueryId::of`] to find out which query that is.
+    #[must_use]
+    pub fn query_id(&self) -> QueryId {
+        self.query_id
+    }
+
+    /// Returns the storage ID of the arguments this memo belongs to.
+    ///
+    /// For an input, these arguments are its [`InputId`]. The ID refers to a
+    /// value in the database's [`Storage`], and may change when [`Db::gc`]
+    /// transfers that value.
+    #[must_use]
+    pub fn args_id(&self) -> <S as Storage>::Id {
+        self.args_id
+    }
+}
+
+impl<S> Clone for MemoId<S>
+where
+    S: Storage,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for MemoId<S> where S: Storage {}
+
+impl<S> PartialEq for MemoId<S>
+where
+    S: Storage,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.query_id == other.query_id && self.args_id == other.args_id
+    }
+}
+
+impl<S> Eq for MemoId<S> where S: Storage {}
+
+impl<S> Hash for MemoId<S>
+where
+    S: Storage,
+{
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        self.query_id.hash(state);
+        self.args_id.hash(state);
+    }
+}
+
+impl<S> fmt::Debug for MemoId<S>
+where
+    S: Storage,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { query_id, args_id } = self;
+        f.debug_struct("MemoId")
+            .field("query_id", query_id)
+            .field("args_id", args_id)
+            .finish()
+    }
+}
+
+impl QueryId {
+    /// Construct a new instance of the ID for a statically-known query.
+    ///
+    /// This is a constant-time operation.
+    #[must_use]
+    pub fn of<Q>() -> Self
+    where
+        Q: Query,
+    {
+        Self(TypeId::of::<Q>())
     }
 }
 

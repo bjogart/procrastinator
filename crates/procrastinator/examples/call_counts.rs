@@ -110,7 +110,7 @@ mod queries {
         fn eval<S, H>(_snapshot: &Snapshot<S, H>, entry: &Self::Args) -> Self::Out
         where
             S: Storage,
-            H: Handler,
+            H: Handler<S>,
         {
             CALLS.entry_total.fetch_add(1, Ordering::Relaxed);
             entry.price * entry.quantity
@@ -124,7 +124,7 @@ mod queries {
         fn eval<S, H>(snapshot: &Snapshot<S, H>, cart: &Self::Args) -> Self::Out
         where
             S: Storage,
-            H: Handler,
+            H: Handler<S>,
         {
             CALLS.subtotal.fetch_add(1, Ordering::Relaxed);
             let entries = snapshot.query::<Cart>(cart);
@@ -142,7 +142,7 @@ mod queries {
         fn eval<S, H>(snapshot: &Snapshot<S, H>, cart: &Self::Args) -> Self::Out
         where
             S: Storage,
-            H: Handler,
+            H: Handler<S>,
         {
             CALLS.shipping.fetch_add(1, Ordering::Relaxed);
             if *snapshot.query::<Subtotal>(cart) < 25 {
@@ -160,7 +160,7 @@ mod queries {
         fn eval<S, H>(snapshot: &Snapshot<S, H>, cart: &Self::Args) -> Self::Out
         where
             S: Storage,
-            H: Handler,
+            H: Handler<S>,
         {
             CALLS.total.fetch_add(1, Ordering::Relaxed);
             let subtotal = *snapshot.query::<Subtotal>(cart);

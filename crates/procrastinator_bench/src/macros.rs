@@ -32,7 +32,7 @@ macro_rules! impl_dep {
             fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
             where
                 S: Storage,
-                H: Handler,
+                H: Handler<S>,
             {
                 let $input($($dep,)*) = args;
                 $(let $dep = snapshot.query::<$dep>($dep);)*
@@ -103,7 +103,7 @@ where
     fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
     where
         S: Storage,
-        H: Handler,
+        H: Handler<S>,
     {
         let dep = snapshot.query::<D>(args).clone();
         O::op(dep)
