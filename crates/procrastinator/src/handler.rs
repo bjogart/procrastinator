@@ -353,9 +353,12 @@ where
     Query(QueryId),
     /// An evaluation of [`Query::eval`](crate::query::Query::eval).
     ///
-    /// This scope is always nested inside a [`ScopedEventKind::Query`] scope,
-    /// and it is only entered if the memoized output could not be reused.
-    Eval(QueryId),
+    /// This scope is only entered if memoized output from a query could not be
+    /// reused. Note that, while an [`Eval`](ScopedEventKind::Eval) scope is
+    /// always nested inside a [`Query`](ScopedEventKind::Query) scope, these do
+    /// not necessarily correspond to one another. An evaluation scope may also
+    /// belong to a dependency of the current query scope.
+    Eval(MemoId<S>),
     /// A call to [`Db::set_input`](crate::Db::set_input) for the input whose
     /// memo has this ID.
     ///

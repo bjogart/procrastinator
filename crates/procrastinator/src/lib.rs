@@ -744,7 +744,7 @@ where
         let out = {
             let _eval_guard = ScopeGuard::new(
                 &self.runtime.handler,
-                ScopedEvent::new(ScopedEventKind::Eval(memo_id.query_id())),
+                ScopedEvent::new(ScopedEventKind::Eval(memo_id)),
             );
             (ops.eval)(self, args)
         };
