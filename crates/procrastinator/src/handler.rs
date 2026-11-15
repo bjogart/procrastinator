@@ -29,6 +29,7 @@
 //! assert_eq!(db.event_handler().query_count(), 1);
 //! ```
 
+use crate::MemoId;
 use crate::QueryId;
 use crate::storage::Storage;
 use std::thread;
@@ -161,7 +162,7 @@ where
     ///
     ///     fn event(&self, event: Event<S>) {
     ///         match event.kind {
-    ///             EventKind::RegisterMemo => {
+    ///             EventKind::RegisterMemo(_) => {
     ///                 self.memos.fetch_add(1, Ordering::Relaxed);
     ///             }
     ///             EventKind::DeregisterMemos(count) => {
@@ -303,9 +304,9 @@ where
     FreeValue(S::Id),
     /// A memo was created.
     ///
-    /// A memo holds the memoized output of one query for one set of
-    /// arguments. Every input also has a memo, which holds its value.
-    RegisterMemo,
+    /// A memo holds the memoized output of one query for one set of arguments.
+    /// Every input also has a memo, which holds its value.
+    RegisterMemo(MemoId<S>),
     /// [`Db::gc`](crate::Db::gc) removed this many memos.
     DeregisterMemos(usize),
 }

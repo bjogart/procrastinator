@@ -46,9 +46,9 @@
 //! assert_eq!(*db.snapshot().query::<WordCount>(&words), 4);
 //! ```
 
+use crate::MemoId;
 use crate::Snapshot;
 use crate::handler::Handler;
-use crate::memo::MemoId;
 use crate::storage::Storage;
 use crate::storage::Transfer as _;
 use core::fmt;
@@ -428,13 +428,13 @@ where
         value_id: S::Id,
     ) -> (MemoId<S>, S::Id) {
         let Self(InputEntry {
-            memo_id: MemoId { query_id, args_id },
+            memo_id,
             transfer: transfer_input,
         }) = self;
         let (next_args_id, next_value_id) =
-            transfer_input(handler, storage_transfer, *args_id, value_id);
+            transfer_input(handler, storage_transfer, memo_id.args_id, value_id);
         let next_memo_id = MemoId {
-            query_id: *query_id,
+            query_id: memo_id.query_id,
             args_id: next_args_id,
         };
         (next_memo_id, next_value_id)

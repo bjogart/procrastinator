@@ -1,15 +1,12 @@
 use crate::INCONSISTENT_STATE;
+use crate::MemoId;
 use crate::QueryId;
 use crate::Revision;
 use crate::handler::Event;
 use crate::handler::EventKind;
 use crate::handler::Handler;
 use crate::storage::Storage;
-use core::fmt;
 use core::fmt::Debug;
-use core::fmt::Formatter;
-use core::hash::Hash;
-use core::hash::Hasher;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::RwLock;
@@ -33,14 +30,6 @@ where
 }
 
 type MemoMap<S> = HashMap<MemoId<S>, RwLock<MemoEntry<S>>>;
-
-pub(crate) struct MemoId<S>
-where
-    S: Storage,
-{
-    pub(crate) query_id: QueryId,
-    pub(crate) args_id: S::Id,
-}
 
 #[derive(Debug)]
 pub(crate) struct MemoEntry<S>
@@ -68,13 +57,13 @@ where
     where
         H: Handler<S>,
     {
-        let memo_id = MemoId { query_id, args_id };
+        let memo_id = MemoId::new(query_id, args_id);
         let mut entry = MemoEntry::new();
         entry.value_id = Some(value_id);
         entry.last_verified = rev;
         entry.last_changed = rev;
 
-        handler.event(Event::new(EventKind::RegisterMemo));
+        handler.event(Event::new(EventKind::RegisterMemo(memo_id)));
         self.0
             .write()
             .expect(INCONSISTENT_STATE)
@@ -87,7 +76,7 @@ where
     where
         H: Handler<S>,
     {
-        let memo_id = MemoId { query_id, args_id };
+        let memo_id = MemoId::new(query_id, args_id);
         let did_insert = match self.0.write().expect(INCONSISTENT_STATE).entry(memo_id) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
@@ -98,7 +87,7 @@ where
         // Database insertion must be finished before the handler is notified as
         // the handler may panic and poison the memo map lock.
         if did_insert {
-            handler.event(Event::new(EventKind::RegisterMemo));
+            handler.event(Event::new(EventKind::RegisterMemo(memo_id)));
         }
         memo_id
     }
@@ -264,53 +253,5 @@ where
             last_changed: Revision::NEVER_VERIFIED,
             value_id: None,
         }
-    }
-}
-
-impl<S> Clone for MemoId<S>
-where
-    S: Storage,
-{
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<S> Copy for MemoId<S> where S: Storage {}
-
-impl<S> PartialEq for MemoId<S>
-where
-    S: Storage,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.query_id == other.query_id && self.args_id == other.args_id
-    }
-}
-
-impl<S> Eq for MemoId<S> where S: Storage {}
-
-impl<S> Hash for MemoId<S>
-where
-    S: Storage,
-{
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: Hasher,
-    {
-        self.query_id.hash(state);
-        self.args_id.hash(state);
-    }
-}
-
-impl<S> Debug for MemoId<S>
-where
-    S: Storage,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let Self { query_id, args_id } = self;
-        f.debug_struct("MemoId")
-            .field("query_id", query_id)
-            .field("args_id", args_id)
-            .finish()
     }
 }

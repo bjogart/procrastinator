@@ -7,7 +7,6 @@ use crate::handler::Handler;
 use crate::handler::ScopeGuard;
 use crate::handler::ScopedEvent;
 use crate::handler::ScopedEventKind;
-use crate::memo::MemoId;
 use crate::memo::Memos;
 use crate::query::Input;
 use crate::query::InputId;
@@ -24,6 +23,9 @@ use crate::update::QueryUpdate;
 use core::any::TypeId;
 use core::any::type_name;
 use core::cell::RefCell;
+use core::fmt;
+use core::hash::Hash;
+use core::hash::Hasher;
 use core::mem;
 use std::collections::HashSet;
 
@@ -195,6 +197,104 @@ where
     S: Storage,
 {
     deps: Vec<MemoId<S>>,
+}
+
+/// An opaque value that uniquely identifies a memo.
+///
+/// A memo holds the memoized output of one query for one set of arguments, so
+/// its ID is a pair of a [`QueryId`] and the storage ID of the arguments. For
+/// an input, the arguments are its [`InputId`]. Memo IDs implement `Eq` and
+/// `Hash`, and are handed to a [`Handler`] in
+/// [`EventKind::RegisterMemo`](handler::EventKind::RegisterMemo).
+///
+/// A memo ID is only meaningful for the database that created it. When
+/// [`Db::gc`] keeps a memo, its arguments may move to a new storage ID (see
+/// [`EventKind::TransferValue`](handler::EventKind::TransferValue)), which
+/// adjusts the memo ID also.
+///
+/// # Examples
+///
+/// A handler that records the ID of every memo that is created:
+///
+/// ```
+/// use procrastinator::Db;
+/// use procrastinator::MemoId;
+/// use procrastinator::QueryId;
+/// use procrastinator::Snapshot;
+/// use procrastinator::handler::Event;
+/// use procrastinator::handler::EventKind;
+/// use procrastinator::handler::Handler;
+/// use procrastinator::handler::ScopedEvent;
+/// use procrastinator::query::Input;
+/// use procrastinator::query::InputId;
+/// use procrastinator::query::Query;
+/// use procrastinator::storage::Storage;
+/// use procrastinator::storage::default;
+/// use std::sync::Mutex;
+///
+/// #[derive(Default)]
+/// struct MemoLog {
+///     memos: Mutex<Vec<MemoId<default::Storage>>>,
+/// }
+///
+/// impl Handler<default::Storage> for MemoLog {
+///     type Payload = ();
+///
+///     fn event(&self, event: Event<default::Storage>) {
+///         if let EventKind::RegisterMemo(memo_id) = event.kind {
+///             self.memos.lock().unwrap().push(memo_id);
+///         }
+///     }
+///
+///     fn enter_scope(&self, _event: ScopedEvent) -> Self::Payload {}
+///
+///     fn exit_scope(&self, (): Self::Payload) {}
+/// }
+///
+/// struct Width;
+/// impl Input for Width {
+///     type Value = u32;
+/// }
+///
+/// struct Area;
+/// impl Query for Area {
+///     type Args = InputId<Width>;
+///     type Out = u32;
+///
+///     fn eval<S, H>(snapshot: &Snapshot<S, H>, width: &Self::Args) -> Self::Out
+///     where
+///         S: Storage,
+///         H: Handler<S>,
+///     {
+///         let width = *snapshot.query::<Width>(width);
+///         width * width
+///     }
+/// }
+///
+/// let mut db: Db<default::Storage, MemoLog> = Db::default();
+/// let small = db.new_input::<Width>(&3);
+/// let large = db.new_input::<Width>(&300);
+/// let snapshot = db.snapshot();
+/// snapshot.query::<Area>(&small);
+/// // Calling a query again with equal arguments reuses its memo.
+/// snapshot.query::<Area>(&small);
+/// snapshot.query::<Area>(&large);
+///
+/// let memos = snapshot.event_handler().memos.lock().unwrap();
+/// let area_memos: Vec<_> = memos
+///     .iter()
+///     .filter(|memo_id| memo_id.query_id() == QueryId::of::<Area>())
+///     .collect();
+/// // One memo per set of arguments: the IDs share a query but not arguments.
+/// assert_eq!(area_memos.len(), 2);
+/// assert_ne!(area_memos[0].args_id(), area_memos[1].args_id());
+/// ```
+pub struct MemoId<S>
+where
+    S: Storage,
+{
+    query_id: QueryId,
+    args_id: S::Id,
 }
 
 /// An opaque value that uniquely identifies a query.
@@ -630,13 +730,12 @@ where
     where
         H: Handler<S>,
     {
-        let MemoId { query_id, args_id } = memo_id;
         let ops = self
             .runtime
             .query_ops
-            .get(query_id)
+            .get(memo_id.query_id())
             .expect("bug: query not registered");
-        let args = self.runtime.storage.get(args_id);
+        let args = self.runtime.storage.get(memo_id.args_id());
         let mut query_update = self.install_query();
         let out = {
             let _eval_guard = ScopeGuard::new(
@@ -770,6 +869,81 @@ where
         Self {
             deps: Vec::default(),
         }
+    }
+}
+
+impl<S> MemoId<S>
+where
+    S: Storage,
+{
+    pub(crate) fn new(query_id: QueryId, args_id: S::Id) -> Self {
+        Self { query_id, args_id }
+    }
+
+    /// Returns the ID of the query this memo belongs to.
+    ///
+    /// Compare it with [`QueryId::of`] to find out which query that is.
+    #[must_use]
+    pub fn query_id(&self) -> QueryId {
+        self.query_id
+    }
+
+    /// Returns the storage ID of the arguments this memo belongs to.
+    ///
+    /// For an input, these arguments are its [`InputId`]. The ID refers to a
+    /// value in the database's [`Storage`], and may change when [`Db::gc`]
+    /// transfers that value.
+    #[must_use]
+    pub fn args_id(&self) -> <S as Storage>::Id {
+        self.args_id
+    }
+}
+
+impl<S> Clone for MemoId<S>
+where
+    S: Storage,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for MemoId<S> where S: Storage {}
+
+impl<S> PartialEq for MemoId<S>
+where
+    S: Storage,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.query_id == other.query_id && self.args_id == other.args_id
+    }
+}
+
+impl<S> Eq for MemoId<S> where S: Storage {}
+
+impl<S> Hash for MemoId<S>
+where
+    S: Storage,
+{
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        self.query_id.hash(state);
+        self.args_id.hash(state);
+    }
+}
+
+impl<S> fmt::Debug for MemoId<S>
+where
+    S: Storage,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { query_id, args_id } = self;
+        f.debug_struct("MemoId")
+            .field("query_id", query_id)
+            .field("args_id", args_id)
+            .finish()
     }
 }
 
