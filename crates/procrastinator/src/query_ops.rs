@@ -17,12 +17,14 @@ use std::sync::RwLock;
 #[derive(Debug)]
 pub(crate) struct QueryOpsRegistry<S, H>(RwLock<HashMap<QueryId, QueryOps<S, H>>>)
 where
-    S: Storage;
+    S: Storage,
+    H: Handler<S>;
 
 #[derive(Debug)]
 pub(crate) struct QueryOps<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     pub(crate) eval: Eval<S, H>,
     pub(crate) store_output: StoreOut<S, H>,
@@ -37,10 +39,10 @@ type StoreOut<S, H> =
 impl<S, H> QueryOpsRegistry<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     pub(crate) fn query_id<Q>(&self, handler: &H, query_id: QueryId)
     where
-        H: Handler<S>,
         Q: Query,
     {
         let Self(registry) = self;
@@ -58,10 +60,7 @@ where
         }
     }
 
-    pub(crate) fn get(&self, query_id: QueryId) -> Option<QueryOps<S, H>>
-    where
-        H: Handler<S>,
-    {
+    pub(crate) fn get(&self, query_id: QueryId) -> Option<QueryOps<S, H>> {
         let Self(registry) = self;
         registry
             .read()
@@ -70,10 +69,7 @@ where
             .copied()
     }
 
-    pub(crate) fn retain(&mut self, handler: &H, retain: impl Fn(QueryId) -> bool)
-    where
-        H: Handler<S>,
-    {
+    pub(crate) fn retain(&mut self, handler: &H, retain: impl Fn(QueryId) -> bool) {
         let Self(registry) = self;
         let registry = registry.get_mut().expect(INCONSISTENT_STATE);
         registry.retain(|query_id, _| {
@@ -90,6 +86,7 @@ where
 impl<S, H> Default for QueryOpsRegistry<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn default() -> Self {
         Self(RwLock::default())
@@ -99,10 +96,10 @@ where
 impl<S, H> QueryOps<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn new<Q>() -> Self
     where
-        H: Handler<S>,
         Q: Query,
     {
         return Self {
@@ -138,10 +135,16 @@ where
 impl<S, H> Clone for QueryOps<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<S, H> Copy for QueryOps<S, H> where S: Storage {}
+impl<S, H> Copy for QueryOps<S, H>
+where
+    S: Storage,
+    H: Handler<S>,
+{
+}

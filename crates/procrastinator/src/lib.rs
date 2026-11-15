@@ -110,6 +110,7 @@ where
     runtime: Shared<Runtime<S, H>>,
     inputs: InputRegistry<S, H>,
     handler: Arc<H>,
+    handler_local: H::Local,
 }
 
 /// A read-only view of a [`Db`], used to run queries.
@@ -160,16 +161,19 @@ where
 pub struct Snapshot<S = DefaultStorage, H = ()>
 where
     S: Storage,
+    H: Handler<S>,
 {
     runtime: Shared<Runtime<S, H>>,
     active_queries: RefCell<ActiveQueryStack<S>>,
     handler: Arc<H>,
+    handler_local: H::Local,
 }
 
 #[derive(Debug)]
 struct Runtime<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     rev: GlobalRevision,
     storage: S,
@@ -239,6 +243,7 @@ where
 /// }
 ///
 /// impl Handler<default::Storage> for MemoLog {
+///     type Local = ();
 ///     type Payload = ();
 ///
 ///     fn event(&self, event: Event<default::Storage>) {
@@ -247,9 +252,14 @@ where
 ///         }
 ///     }
 ///
-///     fn enter_scope(&self, _event: ScopedEvent<default::Storage>) -> Self::Payload {}
+///     fn enter_scope(
+///         &self,
+///         (): &Self::Local,
+///         _event: ScopedEvent<default::Storage>,
+///     ) -> Self::Payload {
+///     }
 ///
-///     fn exit_scope(&self, (): Self::Payload) {}
+///     fn exit_scope(&self, (): &Self::Local, (): Self::Payload) {}
 /// }
 ///
 /// struct Width;
@@ -376,7 +386,7 @@ where
     /// let mut db: Db<Storage, perf::Handler> = Db::default();
     /// let width = db.new_input::<Width>(&3);
     /// db.snapshot().query::<Width>(&width);
-    /// assert_eq!(db.event_handler().query_count(), 1);
+    /// assert_eq!(db.event_handler().stats().queries, 1);
     /// ```
     #[must_use]
     pub fn event_handler(&self) -> &H {
@@ -422,7 +432,6 @@ where
     /// and the database stays usable.
     pub fn new_input<I>(&mut self, value: &I::Value) -> InputId<I>
     where
-        H: Handler<S>,
         I: Input,
     {
         let rev = self.runtime.rev.get();
@@ -484,17 +493,18 @@ where
     /// input.
     pub fn set_input<I>(&mut self, input_id: InputId<I>, value: &I::Value)
     where
-        H: Handler<S>,
         I: Input,
     {
         let memo_id = self.inputs.memo_id(input_id);
         let _set_input_guard = ScopeGuard::new(
             &*self.handler,
+            &self.handler_local,
             ScopedEvent::new(ScopedEventKind::SetInput(memo_id)),
         );
         let runtime = {
             let _wait_guard = ScopeGuard::new(
                 &*self.handler,
+                &self.handler_local,
                 ScopedEvent::new(ScopedEventKind::WaitExclusive),
             );
             self.runtime.wait_exclusive()
@@ -561,14 +571,16 @@ where
     /// Panics if the [`Eq`] or [`Hash`] implementation of a stored value, the
     /// [`Drop`] implementation of a freed value, or the event handler panics.
     /// The panic propagates to the caller, and the database stays usable.
-    pub fn gc(&mut self)
-    where
-        H: Handler<S>,
-    {
-        let _gc_guard = ScopeGuard::new(&*self.handler, ScopedEvent::new(ScopedEventKind::Gc));
+    pub fn gc(&mut self) {
+        let _gc_guard = ScopeGuard::new(
+            &*self.handler,
+            &self.handler_local,
+            ScopedEvent::new(ScopedEventKind::Gc),
+        );
         let runtime = {
             let _wait_guard = ScopeGuard::new(
                 &*self.handler,
+                &self.handler_local,
                 ScopedEvent::new(ScopedEventKind::WaitExclusive),
             );
             self.runtime.wait_exclusive()
@@ -587,6 +599,7 @@ where
             runtime: Shared::default(),
             inputs: InputRegistry::default(),
             handler: Arc::default(),
+            handler_local: H::Local::default(),
         }
     }
 }
@@ -594,11 +607,13 @@ where
 impl<S, H> Snapshot<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
     fn new(runtime: Shared<Runtime<S, H>>, handler: Arc<H>) -> Self {
         Self {
             runtime,
             handler,
+            handler_local: H::Local::default(),
             active_queries: RefCell::default(),
         }
     }
@@ -627,7 +642,7 @@ where
     /// let snapshot = db.snapshot();
     /// snapshot.query::<Width>(&width);
     /// snapshot.query::<Width>(&width);
-    /// assert_eq!(snapshot.event_handler().query_count(), 2);
+    /// assert_eq!(snapshot.event_handler().stats().queries, 2);
     /// ```
     #[must_use]
     pub fn event_handler(&self) -> &H {
@@ -700,12 +715,12 @@ where
     /// error. It may panic, or return the value of an unrelated input.
     pub fn query<Q>(&self, args: &Q::Args) -> <S::Handle as Handle>::TypedHandle<Q::Out>
     where
-        H: Handler<S>,
         Q: Query,
     {
         let query_id = QueryId::of::<Q>();
         let _query_guard = ScopeGuard::new(
             &*self.handler,
+            &self.handler_local,
             ScopedEvent::new(ScopedEventKind::Query(query_id)),
         );
         self.runtime
@@ -722,10 +737,7 @@ where
         Handle::downcast::<Q::Out>(self.runtime.storage.get(value_id))
     }
 
-    fn verify_memo(&self, current_rev: Revision, memo_id: MemoId<S>)
-    where
-        H: Handler<S>,
-    {
+    fn verify_memo(&self, current_rev: Revision, memo_id: MemoId<S>) {
         let (last_verified, deps) = {
             let (last_verified, deps) = self.runtime.memos.verification(memo_id);
             // If this rev is up to date, skip it.
@@ -744,10 +756,7 @@ where
         self.eval_memo(current_rev, memo_id)
     }
 
-    fn eval_memo(&self, current_rev: Revision, memo_id: MemoId<S>)
-    where
-        H: Handler<S>,
-    {
+    fn eval_memo(&self, current_rev: Revision, memo_id: MemoId<S>) {
         let ops = self
             .runtime
             .query_ops
@@ -758,6 +767,7 @@ where
         let out = {
             let _eval_guard = ScopeGuard::new(
                 &*self.handler,
+                &self.handler_local,
                 ScopedEvent::new(ScopedEventKind::Eval(memo_id)),
             );
             (ops.eval)(self, args)
@@ -775,18 +785,12 @@ where
         current_rev: Revision,
         memo_last_verified: Revision,
         dep: MemoId<S>,
-    ) -> bool
-    where
-        H: Handler<S>,
-    {
+    ) -> bool {
         self.verify_memo(current_rev, dep);
         self.runtime.memos.last_changed(dep) > memo_last_verified
     }
 
-    fn install_query(&self) -> QueryUpdate<'_, S, H>
-    where
-        H: Handler<S>,
-    {
+    fn install_query(&self) -> QueryUpdate<'_, S, H> {
         let mut active_queries = self.active_queries.borrow_mut();
         let ActiveQueryStack(active_queries) = &mut *active_queries;
         active_queries.push(ActiveQuery::default());
@@ -813,11 +817,9 @@ where
 impl<S, H> Runtime<S, H>
 where
     S: Storage,
+    H: Handler<S>,
 {
-    fn gc(&mut self, handler: &H, inputs: &mut InputRegistry<S, H>)
-    where
-        H: Handler<S>,
-    {
+    fn gc(&mut self, handler: &H, inputs: &mut InputRegistry<S, H>) {
         let Self {
             storage,
             memos,
