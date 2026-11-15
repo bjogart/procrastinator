@@ -20,25 +20,30 @@ use core::cell::Cell;
 use core::fmt::Debug;
 use core::hash::Hash;
 use core::hash::Hasher;
-use core::ops::Sub;
 use core::panic::AssertUnwindSafe;
+use core::time::Duration;
 use std::panic;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 struct Counts {
-    query_count: usize,
-    eval_count: usize,
-    registered_query_ops: isize,
-    stored_values: isize,
-    memo_count: isize,
+    query_count: u64,
+    eval_count: u64,
+    registered_query_ops: i64,
+    stored_values: i64,
+    memo_count: i64,
 }
 
 #[test]
 fn db_starts_empty() {
     assert_eq!(
-        Counts::new(&Db::<DefaultStorage, perf::Handler>::default().snapshot()),
+        Counts::from(
+            Db::<DefaultStorage, perf::Handler>::default()
+                .event_handler()
+                .stats()
+        ),
         Counts {
             query_count: 0,
             eval_count: 0,
@@ -190,11 +195,11 @@ fn garbage_collection_reclaims_unused_ops_and_storage_and_memos() {
     init_queries(&db, price, count, burrito_salsa);
     additional_input_queries(&mut db, count, burrito_salsa);
 
-    let before = Counts::new(&db.snapshot());
+    let before = db.event_handler().stats();
     db.gc();
-    let after = Counts::new(&db.snapshot());
+    let after = db.event_handler().stats();
     assert_eq!(
-        after - before,
+        Counts::from(after.since(before)),
         Counts {
             query_count: 0,
             eval_count: 0,
@@ -204,11 +209,11 @@ fn garbage_collection_reclaims_unused_ops_and_storage_and_memos() {
         }
     );
 
-    let before = Counts::new(&db.snapshot());
+    let before = db.event_handler().stats();
     init_queries(&db, price, count, burrito_salsa);
-    let after = Counts::new(&db.snapshot());
+    let after = db.event_handler().stats();
     assert_eq!(
-        after - before,
+        Counts::from(after.since(before)),
         Counts {
             query_count: 10,
             eval_count: 4,
@@ -371,12 +376,15 @@ fn panicking_garbage_collection_leaves_db_unchanged() {
         30
     );
     // The first input transfers successfully before the second one panics.
-    let before = Counts::new(&db.snapshot());
+    let before = db.event_handler().stats();
     PANIC_ON_HASH.set(true);
     let result = panic::catch_unwind(AssertUnwindSafe(|| db.gc()));
     PANIC_ON_HASH.set(false);
     assert!(result.is_err());
-    assert_eq!(Counts::new(&db.snapshot()) - before, Counts::default());
+    assert_eq!(
+        Counts::from(db.event_handler().stats().since(before)),
+        Counts::default()
+    );
     // Memos survived, so the derived query is not re-evaluated.
     assert_query_delta::<FragileTotalPrice>(
         &db,
@@ -507,6 +515,144 @@ fn panicking_hash_impls_cannot_trigger_during_storage_rehash() {
     }));
     PANIC_ON_HASH.set(false);
     result.unwrap();
+}
+
+#[test]
+fn perf_times_do_not_count_nested_scopes_twice() {
+    let db: Db<DefaultStorage, perf::Handler> = Db::default();
+    let snapshot = db.snapshot();
+    let start = Instant::now();
+    snapshot.query::<NestedNap>(&0);
+    let wall = start.elapsed();
+    let stats = snapshot.event_handler().stats();
+    assert_eq!(stats.queries, 2);
+    assert_eq!(stats.evals, 2);
+    assert!(stats.eval_time >= NAP_DURATION);
+    // Both query calls and both evaluations contain the nap. If any of them
+    // included its nested scopes, the total would be at least twice the nap.
+    assert!(stats.query_time() <= wall);
+}
+
+#[test]
+fn perf_times_of_parallel_snapshots_do_not_interfere() {
+    let db: Db<DefaultStorage, perf::Handler> = Db::default();
+    let walls: Vec<Duration> = thread::scope(|scope| {
+        let workers: Vec<_> = (0..2)
+            .map(|worker| {
+                let snapshot = db.snapshot();
+                scope.spawn(move || {
+                    let start = Instant::now();
+                    snapshot.query::<NestedNap>(&worker);
+                    start.elapsed()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect()
+    });
+    let stats = db.event_handler().stats();
+    assert_eq!(stats.queries, 4);
+    assert_eq!(stats.evals, 4);
+    assert!(stats.eval_time >= NAP_DURATION * 2);
+    assert!(stats.query_time() <= walls.iter().sum());
+}
+
+#[test]
+fn perf_counts_panicking_scopes_and_stays_consistent() {
+    let mut db: Db<DefaultStorage, perf::Handler> = Db::default();
+    let price = db.new_input::<BurritoPrice>(&8);
+    let count = db.new_input::<BurritoCount>(&3);
+    let snapshot = db.snapshot();
+    PANIC_IN_EVAL.set(true);
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        snapshot.query::<FlakyPriceWithVat>(&(price, count));
+    }));
+    PANIC_IN_EVAL.set(false);
+    assert!(result.is_err());
+    // `FlakyPriceWithVat` called `FlakyTotalPrice`, which read the price and
+    // then panicked. All of these scopes ended, so all of them are counted.
+    let unwound = snapshot.event_handler().stats();
+    assert_eq!(unwound.queries, 3);
+    assert_eq!(unwound.evals, 2);
+    // The same snapshot keeps measuring correctly after unwinding.
+    let start = Instant::now();
+    snapshot.query::<FlakyPriceWithVat>(&(price, count));
+    let wall = start.elapsed();
+    let stats = snapshot.event_handler().stats().since(unwound);
+    assert_eq!(stats.queries, 4);
+    assert_eq!(stats.evals, 2);
+    assert!(stats.query_time() <= wall);
+}
+
+#[test]
+fn perf_tracks_db_operations() {
+    let mut db: Db<DefaultStorage, perf::Handler> = Db::default();
+    let price = db.new_input::<BurritoPrice>(&8);
+    assert_eq!(*db.snapshot().query::<BurritoPriceWithShipping>(&price), 10);
+    let before = db.event_handler().stats();
+    let start = Instant::now();
+    db.set_input(price, &4);
+    db.gc();
+    let wall = start.elapsed();
+    let stats = db.event_handler().stats().since(before);
+    assert_eq!(stats.queries, 0);
+    assert_eq!(stats.evals, 0);
+    assert_eq!(stats.set_inputs, 1);
+    assert_eq!(stats.gcs, 1);
+    assert!(stats.set_input_time + stats.gc_time + stats.wait_time <= wall);
+    // Garbage collection keeps the input, and removes the derived query.
+    assert_eq!(
+        stats.query_ops,
+        perf::Count {
+            added: 0,
+            removed: 1
+        }
+    );
+    assert_eq!(
+        stats.memos,
+        perf::Count {
+            added: 0,
+            removed: 1
+        }
+    );
+    // The new input value was added. The old input value and the output of
+    // the derived query were removed.
+    assert_eq!(
+        stats.values,
+        perf::Count {
+            added: 1,
+            removed: 2
+        }
+    );
+    assert_eq!(stats.values.net(), -1);
+}
+
+#[test]
+fn perf_stats_subtraction_saturates() {
+    let later = perf::Stats {
+        queries: 3,
+        eval_time: NAP_DURATION,
+        memos: perf::Count {
+            added: 1,
+            removed: 4,
+        },
+        ..perf::Stats::default()
+    };
+    assert_eq!(later.since(perf::Stats::default()), later);
+    assert_eq!(perf::Stats::default().since(later), perf::Stats::default());
+    assert_eq!(later.memos.net(), -3);
+    let max = perf::Count {
+        added: u64::MAX,
+        removed: 0,
+    };
+    assert_eq!(max.net(), i64::MAX);
+    let min = perf::Count {
+        added: 0,
+        removed: u64::MAX,
+    };
+    assert_eq!(min.net(), i64::MIN);
 }
 
 fn init_inputs(
@@ -682,10 +828,10 @@ fn assert_new_input<I>(
 where
     I: Input,
 {
-    let before = Counts::new(&db.snapshot());
+    let before = db.event_handler().stats();
     let input_id = db.new_input::<I>(value);
-    let after = Counts::new(&db.snapshot());
-    assert_eq!(after - before, counts);
+    let after = db.event_handler().stats();
+    assert_eq!(Counts::from(after.since(before)), counts);
     input_id
 }
 
@@ -745,36 +891,21 @@ fn assert_query_delta<Q>(
     Q::Out: Eq + Debug,
 {
     let snapshot = db.snapshot();
-    let before = Counts::new(&snapshot);
+    let before = snapshot.event_handler().stats();
     let out = snapshot.query::<Q>(args);
     assert_eq!(out.as_ref(), exp_out);
-    let after = Counts::new(&snapshot);
-    assert_eq!(after - before, d_counts);
+    let after = snapshot.event_handler().stats();
+    assert_eq!(Counts::from(after.since(before)), d_counts);
 }
 
-impl Counts {
-    fn new(snapshot: &Snapshot<DefaultStorage, perf::Handler>) -> Self {
-        let handler = snapshot.event_handler();
+impl From<perf::Stats> for Counts {
+    fn from(stats: perf::Stats) -> Self {
         Self {
-            query_count: handler.query_count(),
-            eval_count: handler.eval_count(),
-            registered_query_ops: handler.registered_query_ops().try_into().unwrap(),
-            stored_values: handler.stored_values().try_into().unwrap(),
-            memo_count: handler.memo_count().try_into().unwrap(),
-        }
-    }
-}
-
-impl Sub for Counts {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self {
-            query_count: self.query_count - rhs.query_count,
-            eval_count: self.eval_count - rhs.eval_count,
-            registered_query_ops: self.registered_query_ops - rhs.registered_query_ops,
-            stored_values: self.stored_values - rhs.stored_values,
-            memo_count: self.memo_count - rhs.memo_count,
+            query_count: stats.queries,
+            eval_count: stats.evals,
+            registered_query_ops: stats.query_ops.net(),
+            stored_values: stats.values.net(),
+            memo_count: stats.memos.net(),
         }
     }
 }
@@ -986,6 +1117,37 @@ impl Query for FlakyPriceWithVat {
         H: Handler<S>,
     {
         *snapshot.query::<FlakyTotalPrice>(args) + 5
+    }
+}
+
+const NAP_DURATION: Duration = Duration::from_millis(10);
+
+struct NestedNap;
+impl Query for NestedNap {
+    type Args = u64;
+    type Out = u64;
+
+    fn eval<S, H>(snapshot: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
+    where
+        S: Storage,
+        H: Handler<S>,
+    {
+        *snapshot.query::<Nap>(args)
+    }
+}
+
+struct Nap;
+impl Query for Nap {
+    type Args = u64;
+    type Out = u64;
+
+    fn eval<S, H>(_: &Snapshot<S, H>, args: &Self::Args) -> Self::Out
+    where
+        S: Storage,
+        H: Handler<S>,
+    {
+        thread::sleep(NAP_DURATION);
+        *args
     }
 }
 

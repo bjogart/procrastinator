@@ -26,7 +26,7 @@
 //! let mut db: Db<Storage, perf::Handler> = Db::default();
 //! let width = db.new_input::<Width>(&3);
 //! db.snapshot().query::<Width>(&width);
-//! assert_eq!(db.event_handler().query_count(), 1);
+//! assert_eq!(db.event_handler().stats().queries, 1);
 //! ```
 
 use crate::MemoId;

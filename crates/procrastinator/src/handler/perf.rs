@@ -5,26 +5,22 @@
 
 use crate::handler::Event;
 use crate::handler::EventKind;
+use crate::handler::Handler as HandlerTrait;
 use crate::handler::ScopedEvent;
 use crate::handler::ScopedEventKind;
+use crate::storage::Storage;
+use core::cell::Cell;
 use core::sync::atomic::AtomicU64;
-use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use core::time::Duration;
 use std::time::Instant;
 
-use crate::handler::Handler as HandlerTrait;
-use crate::storage::Storage;
-
 /// A handler that counts and times database operations.
 ///
-/// It tracks two kinds of metrics:
-///
-/// - Accumulators count query calls and evaluations, and measure the time
-///   spent in them. [`Handler::reset`] sets them back to zero, so you can
-///   measure one operation at a time.
-/// - Gauges report how many query types, values, and memos the database
-///   currently holds. They are not affected by [`Handler::reset`].
+/// The handler only ever adds to its counters. Read them with
+/// [`Handler::stats`], which returns the totals since the database was
+/// created. To measure a single operation, take the [`Stats`] before and after
+/// it and subtract them with [`Stats::since`].
 ///
 /// All counters are atomic, so the handler can be read from any thread while
 /// queries run.
@@ -67,187 +63,370 @@ use crate::storage::Storage;
 ///
 /// let snapshot = db.snapshot();
 /// snapshot.query::<Area>(&width);
-/// snapshot.query::<Area>(&width);
-///
-/// let handler = snapshot.event_handler();
-/// // Two calls to `Area`, plus one call to `Width` from inside `Area::eval`.
-/// assert_eq!(handler.query_count(), 3);
-/// // The second call to `Area` reused the memoized output.
-/// assert_eq!(handler.eval_count(), 1);
+/// let first = snapshot.event_handler().stats();
+/// // One call to `Area`, plus one call to `Width` from inside `Area::eval`.
+/// assert_eq!(first.queries, 2);
+/// assert_eq!(first.evals, 1);
 /// // One memo for the input, and one for `Area`.
-/// assert_eq!(handler.memo_count(), 2);
+/// assert_eq!(first.memos.net(), 2);
+///
+/// snapshot.query::<Area>(&width);
+/// let second = snapshot.event_handler().stats().since(first);
+/// // The second call to `Area` reused the memoized output.
+/// assert_eq!(second.queries, 1);
+/// assert_eq!(second.evals, 0);
 /// ```
 #[derive(Debug, Default)]
 pub struct Handler {
-    query_time: AtomicDuration,
-    eval_time: AtomicDuration,
-    query_count: AtomicUsize,
-    eval_count: AtomicUsize,
-    registered_query_ops: AtomicUsize,
-    stored_values: AtomicUsize,
-    memo_count: AtomicUsize,
+    query: AtomicScope,
+    eval: AtomicScope,
+    set_input: AtomicScope,
+    gc: AtomicScope,
+    wait_exclusive: AtomicScope,
+    query_ops: AtomicCount,
+    values: AtomicCount,
+    memos: AtomicCount,
 }
 
 #[derive(Debug, Default)]
-struct AtomicDuration {
+struct AtomicScope {
+    count: AtomicU64,
     ns: AtomicU64,
+}
+
+#[derive(Debug, Default)]
+struct AtomicCount {
+    added: AtomicU64,
+    removed: AtomicU64,
+}
+
+/// The metrics collected by a [`Handler`].
+///
+/// [`Handler::stats`] returns the totals since the database was created.
+/// [`Stats::since`] subtracts two values, which gives the metrics of everything
+/// that happened in between.
+///
+/// # Scopes
+///
+/// Scopes are counted and timed when they end. An operation that is still
+/// running is not included, and neither are the operations it is nested in.
+/// Operations that end in a panic are included.
+///
+/// Every time is a self-time: it excludes the time spent in nested scopes,
+/// which is recorded under the nested scope instead. No span of time is counted
+/// twice, so the times of one [`Snapshot`](crate::Snapshot) add up to the time
+/// it spent inside its outermost [`Snapshot::query`](crate::Snapshot::query)
+/// calls. Times of different snapshots are added together, so with queries
+/// running on several threads the total can exceed the elapsed wall-clock time.
+///
+/// # Examples
+///
+/// ```
+/// use procrastinator::Db;
+/// use procrastinator::handler::perf;
+/// use procrastinator::query::Input;
+/// use procrastinator::storage::default::Storage;
+///
+/// struct Width;
+/// impl Input for Width {
+///     type Value = u32;
+/// }
+///
+/// let mut db: Db<Storage, perf::Handler> = Db::default();
+/// let width = db.new_input::<Width>(&3);
+///
+/// let before = db.event_handler().stats();
+/// db.set_input(width, &4);
+/// db.snapshot().query::<Width>(&width);
+/// let stats = db.event_handler().stats().since(before);
+///
+/// assert_eq!(stats.set_inputs, 1);
+/// assert_eq!(stats.queries, 1);
+/// // Creating the input happened before the measurement started. Setting it
+/// // stored one new value.
+/// assert_eq!(stats.memos, perf::Count::default());
+/// assert_eq!(stats.values.added, 1);
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[non_exhaustive]
+pub struct Stats {
+    /// The number of [`Snapshot::query`](crate::Snapshot::query) calls,
+    /// including calls from inside other queries and reads of inputs.
+    pub queries: u64,
+    /// The time spent in [`Snapshot::query`](crate::Snapshot::query) outside of
+    /// [`Query::eval`](crate::query::Query::eval): storing arguments and
+    /// outputs, looking up memos, and checking whether dependencies changed.
+    pub query_overhead: Duration,
+    /// The number of [`Query::eval`](crate::query::Query::eval) calls.
+    ///
+    /// A query is only evaluated if its memoized output could not be reused.
+    /// Calling one query can evaluate several: its dependencies are
+    /// re-evaluated first if their own dependencies changed.
+    pub evals: u64,
+    /// The time spent in [`Query::eval`](crate::query::Query::eval), excluding
+    /// the queries it calls.
+    pub eval_time: Duration,
+    /// The number of [`Db::set_input`](crate::Db::set_input) calls.
+    pub set_inputs: u64,
+    /// The time spent in [`Db::set_input`](crate::Db::set_input), excluding
+    /// [`Stats::wait_time`].
+    pub set_input_time: Duration,
+    /// The number of [`Db::gc`](crate::Db::gc) calls.
+    pub gcs: u64,
+    /// The time spent in [`Db::gc`](crate::Db::gc), excluding
+    /// [`Stats::wait_time`].
+    pub gc_time: Duration,
+    /// The time [`Db::set_input`](crate::Db::set_input) and
+    /// [`Db::gc`](crate::Db::gc) spent waiting for every
+    /// [`Snapshot`](crate::Snapshot) to drop.
+    pub wait_time: Duration,
+    /// Query and input types registered with and deregistered from the
+    /// database.
+    ///
+    /// See [`EventKind::RegisterQueryOps`].
+    pub query_ops: Count,
+    /// Values stored in and freed from the database.
+    ///
+    /// See [`EventKind::StoreValue`] for what counts as a value. Values that
+    /// [`Db::gc`](crate::Db::gc) keeps are counted as neither.
+    pub values: Count,
+    /// Memos created in and removed from the database.
+    ///
+    /// See [`EventKind::RegisterMemo`] for what a memo is. Memos that
+    /// [`Db::gc`](crate::Db::gc) keeps are counted as neither.
+    pub memos: Count,
+}
+
+/// How many resources of one kind were added and removed.
+///
+/// Both numbers only ever grow. In the totals returned by [`Handler::stats`],
+/// [`Count::net`] is the number of resources the database currently holds.
+///
+/// # Examples
+///
+/// ```
+/// use procrastinator::handler::perf::Count;
+///
+/// let count = Count {
+///     added: 2,
+///     removed: 5,
+/// };
+/// assert_eq!(count.net(), -3);
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct Count {
+    /// The number of resources that were added.
+    pub added: u64,
+    /// The number of resources that were removed.
+    pub removed: u64,
 }
 
 impl<S> HandlerTrait<S> for Handler
 where
     S: Storage,
 {
-    type Local = ();
-    type Payload = (ScopedEventKind<S>, Instant);
+    type Local = Cell<u64>;
+    type Payload = (ScopedEventKind<S>, u64, Instant);
 
     fn event(&self, event: Event<S>) {
-        match event.kind {
-            EventKind::RegisterQueryOps(_) => {
-                self.registered_query_ops.fetch_add(1, Ordering::Relaxed);
-            }
-            EventKind::DeregisterQueryOps(_) => {
-                self.registered_query_ops.fetch_sub(1, Ordering::Relaxed);
-            }
-            EventKind::StoreValue(_) => {
-                self.stored_values.fetch_add(1, Ordering::Relaxed);
-            }
-            EventKind::FreeValue(_) => {
-                self.stored_values.fetch_sub(1, Ordering::Relaxed);
-            }
-            EventKind::RegisterMemo(_) => {
-                self.memo_count.fetch_add(1, Ordering::Relaxed);
-            }
-            EventKind::DeregisterMemo(_) => {
-                self.memo_count.fetch_sub(1, Ordering::Relaxed);
-            }
-            EventKind::TransferValue { .. } | EventKind::TransferMemo { .. } => {}
-        }
+        let Self {
+            query: _,
+            eval: _,
+            set_input: _,
+            gc: _,
+            wait_exclusive: _,
+            query_ops,
+            values,
+            memos,
+        } = self;
+        let counter = match event.kind {
+            EventKind::RegisterQueryOps(_) => &query_ops.added,
+            EventKind::DeregisterQueryOps(_) => &query_ops.removed,
+            EventKind::StoreValue(_) => &values.added,
+            EventKind::FreeValue(_) => &values.removed,
+            EventKind::RegisterMemo(_) => &memos.added,
+            EventKind::DeregisterMemo(_) => &memos.removed,
+            EventKind::TransferValue { .. } | EventKind::TransferMemo { .. } => return,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn enter_scope(&self, (): &Self::Local, event: ScopedEvent<S>) -> Self::Payload {
-        match event.kind {
-            ScopedEventKind::Query(_) => {
-                self.query_count.fetch_add(1, Ordering::Relaxed);
-            }
-            ScopedEventKind::Eval(_) => {
-                self.eval_count.fetch_add(1, Ordering::Relaxed);
-            }
-            ScopedEventKind::SetInput(_) | ScopedEventKind::Gc | ScopedEventKind::WaitExclusive => {
-            }
-        }
-        (event.kind, Instant::now())
+    fn enter_scope(&self, attributed_ns: &Self::Local, event: ScopedEvent<S>) -> Self::Payload {
+        (event.kind, attributed_ns.get(), Instant::now())
     }
 
-    fn exit_scope(&self, (): &Self::Local, payload: Self::Payload) {
-        let (kind, start) = payload;
-        let elapsed = start.elapsed();
-        match kind {
-            ScopedEventKind::Query(_) => self.query_time.add(elapsed),
-            ScopedEventKind::Eval(_) => self.eval_time.add(elapsed),
-            ScopedEventKind::SetInput(_) | ScopedEventKind::Gc | ScopedEventKind::WaitExclusive => {
-            }
-        }
+    fn exit_scope(&self, attributed_ns: &Self::Local, payload: Self::Payload) {
+        let (kind, attributed_at_start, start) = payload;
+        let elapsed = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let Self {
+            query,
+            eval,
+            set_input,
+            gc,
+            wait_exclusive,
+            query_ops: _,
+            values: _,
+            memos: _,
+        } = self;
+        // Scopes that share `attributed_ns` are properly nested. Whatever was
+        // attributed since this scope started was therefore recorded by the
+        // scopes nested inside it, and the remainder is this scope's own time.
+        // This must not panic: scopes also exit while a panic unwinds, and a
+        // panic then will abort the process.
+        let attributed = attributed_ns.get();
+        let nested = attributed.saturating_sub(attributed_at_start);
+        let own = elapsed.saturating_sub(nested);
+        attributed_ns.set(attributed.saturating_add(own));
+        let scope = match kind {
+            ScopedEventKind::Query(_) => query,
+            ScopedEventKind::Eval(_) => eval,
+            ScopedEventKind::SetInput(_) => set_input,
+            ScopedEventKind::Gc => gc,
+            ScopedEventKind::WaitExclusive => wait_exclusive,
+        };
+        scope.count.fetch_add(1, Ordering::Relaxed);
+        scope.ns.fetch_add(own, Ordering::Relaxed);
     }
 }
 
 impl Handler {
-    /// Resets the accumulators to zero.
+    /// Returns the metrics collected since the database was created.
     ///
-    /// Query and evaluation counts and times are reset. Gauges, like the
-    /// number of memos, are not.
+    /// The counters are read one by one. If queries are running on other
+    /// threads in the meantime, the result may include some of the scopes and
+    /// events that finish during the call and not others. Every counter only
+    /// grows, so [`Stats::since`] is accurate up to those few operations.
     ///
-    /// Note that, though individual counters are atomic, the reset touches
-    /// multiple counters. Events emitted during a reset on a different thread
-    /// can desynchronize counters. Users should take care to only reset from
-    /// the main thread while no other queries are running.
-    pub fn reset(&self) {
+    /// See [`Stats`] for an example.
+    #[must_use]
+    pub fn stats(&self) -> Stats {
         let Self {
-            query_time,
-            eval_time,
-            query_count,
-            eval_count,
-            registered_query_ops: _,
-            stored_values: _,
-            memo_count: _,
+            query,
+            eval,
+            set_input,
+            gc,
+            wait_exclusive,
+            query_ops,
+            values,
+            memos,
         } = self;
-        query_time.reset();
-        eval_time.reset();
-        query_count.store(0, Ordering::Relaxed);
-        eval_count.store(0, Ordering::Relaxed);
-    }
-
-    /// Returns the total time spent in query calls since the last reset.
-    ///
-    /// This sums the duration of every [`ScopedEventKind::Query`] scope.
-    /// Nested calls are counted in full for each level, and calls on
-    /// different threads are added together, so the total can exceed the
-    /// elapsed wall-clock time.
-    pub fn query_time(&self) -> Duration {
-        self.query_time.duration()
-    }
-
-    /// Returns the total time spent evaluating queries since the last reset.
-    ///
-    /// This sums the duration of every [`ScopedEventKind::Eval`] scope. As
-    /// with [`Handler::query_time`], nested evaluations are counted at
-    /// every level and threads are added together.
-    pub fn eval_time(&self) -> Duration {
-        self.eval_time.duration()
-    }
-
-    /// Returns the number of query calls since the last reset.
-    ///
-    /// Every call to [`Snapshot::query`](crate::Snapshot::query) is counted,
-    /// including calls from inside other queries.
-    pub fn query_count(&self) -> usize {
-        self.query_count.load(Ordering::Relaxed)
-    }
-
-    /// Returns the number of query evaluations since the last reset.
-    ///
-    /// A query call only evaluates the query if its memoized output could not
-    /// be reused. The ratio between [`Handler::eval_count`] and
-    /// [`Handler::query_count`] shows how much work memoization saved.
-    pub fn eval_count(&self) -> usize {
-        self.eval_count.load(Ordering::Relaxed)
-    }
-
-    /// Returns the number of query and input types the database currently has
-    /// registered.
-    pub fn registered_query_ops(&self) -> usize {
-        self.registered_query_ops.load(Ordering::Relaxed)
-    }
-
-    /// Returns the number of values the database currently stores.
-    ///
-    /// See [`EventKind::StoreValue`] for what counts as a value.
-    pub fn stored_values(&self) -> usize {
-        self.stored_values.load(Ordering::Relaxed)
-    }
-
-    /// Returns the number of memos the database currently holds.
-    ///
-    /// See [`EventKind::RegisterMemo`] for what a memo is.
-    pub fn memo_count(&self) -> usize {
-        self.memo_count.load(Ordering::Relaxed)
+        let (queries, query_overhead) = query.load();
+        let (evals, eval_time) = eval.load();
+        let (set_inputs, set_input_time) = set_input.load();
+        let (gcs, gc_time) = gc.load();
+        let (_, wait_time) = wait_exclusive.load();
+        Stats {
+            queries,
+            evals,
+            set_inputs,
+            gcs,
+            query_overhead,
+            eval_time,
+            set_input_time,
+            gc_time,
+            wait_time,
+            query_ops: query_ops.load(),
+            values: values.load(),
+            memos: memos.load(),
+        }
     }
 }
 
-impl AtomicDuration {
-    fn add(&self, duration: Duration) {
-        let Ok(ns) = duration.as_nanos().try_into() else {
-            // After `u64::MAX` nanoseconds a few seconds are unlikely to move
-            // the needle. Ignore it.
-            return;
-        };
-        self.ns.fetch_add(ns, Ordering::Relaxed);
+impl AtomicScope {
+    fn load(&self) -> (u64, Duration) {
+        let Self { count, ns } = self;
+        (
+            count.load(Ordering::Relaxed),
+            Duration::from_nanos(ns.load(Ordering::Relaxed)),
+        )
+    }
+}
+
+impl AtomicCount {
+    fn load(&self) -> Count {
+        let Self { added, removed } = self;
+        let removed = removed.load(Ordering::Relaxed);
+        let added = added.load(Ordering::Relaxed);
+        Count { added, removed }
+    }
+}
+
+impl Stats {
+    /// Returns the metrics of everything that happened after `earlier` was
+    /// taken.
+    ///
+    /// Both values must come from the same [`Handler`], and `earlier` must be
+    /// the older one. Otherwise the result is meaningless, but harmless: fields
+    /// saturate at 0.
+    ///
+    /// See [`Stats`] for an example.
+    #[must_use]
+    pub fn since(self, earlier: Self) -> Self {
+        let Self {
+            queries,
+            evals,
+            set_inputs,
+            gcs,
+            query_overhead,
+            eval_time,
+            set_input_time,
+            gc_time,
+            wait_time,
+            query_ops,
+            values,
+            memos,
+        } = self;
+        Self {
+            queries: queries.saturating_sub(earlier.queries),
+            evals: evals.saturating_sub(earlier.evals),
+            set_inputs: set_inputs.saturating_sub(earlier.set_inputs),
+            gcs: gcs.saturating_sub(earlier.gcs),
+            query_overhead: query_overhead.saturating_sub(earlier.query_overhead),
+            eval_time: eval_time.saturating_sub(earlier.eval_time),
+            set_input_time: set_input_time.saturating_sub(earlier.set_input_time),
+            gc_time: gc_time.saturating_sub(earlier.gc_time),
+            wait_time: wait_time.saturating_sub(earlier.wait_time),
+            query_ops: query_ops.since(earlier.query_ops),
+            values: values.since(earlier.values),
+            memos: memos.since(earlier.memos),
+        }
     }
 
-    fn duration(&self) -> Duration {
-        Duration::from_nanos(self.ns.load(Ordering::Relaxed))
+    /// Returns the total time spent in
+    /// [`Snapshot::query`](crate::Snapshot::query) calls.
+    ///
+    /// This is the sum of [`Stats::query_overhead`] and [`Stats::eval_time`].
+    /// Nested calls are not counted twice.
+    #[must_use]
+    pub fn query_time(self) -> Duration {
+        self.query_overhead.saturating_add(self.eval_time)
+    }
+}
+
+impl Count {
+    /// Returns the number of resources added minus the number removed.
+    ///
+    /// In the totals returned by [`Handler::stats`], this is the number of
+    /// resources the database currently holds. In the result of
+    /// [`Stats::since`], it is how much that number changed, which is negative
+    /// if more resources were removed than added.
+    ///
+    /// See [`Count`] for an example.
+    #[must_use]
+    pub fn net(self) -> i64 {
+        let Self { added, removed } = self;
+        if added >= removed {
+            i64::try_from(added.saturating_sub(removed)).unwrap_or(i64::MAX)
+        } else {
+            i64::try_from(removed.saturating_sub(added)).map_or(i64::MIN, i64::saturating_neg)
+        }
     }
 
-    fn reset(&self) {
-        self.ns.store(0, Ordering::Relaxed);
+    fn since(self, earlier: Self) -> Self {
+        let Self { added, removed } = self;
+        Self {
+            added: added.saturating_sub(earlier.added),
+            removed: removed.saturating_sub(earlier.removed),
+        }
     }
 }

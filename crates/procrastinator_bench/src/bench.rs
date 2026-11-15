@@ -165,10 +165,10 @@ struct Scenario {
 struct Counts {
     /// *Every* `Db::query::<Q>` invocation that occurred during the run,
     /// including nested calls made from within `Query::eval`.
-    query: usize,
+    query: u64,
     /// The number of times `Query::eval` executed (i.e., cache misses /
     /// re-evaluations). Does *not* include memo hits where `eval` did not run.
-    eval: usize,
+    eval: u64,
 }
 
 /// Timing measurements for a single run.
@@ -176,16 +176,16 @@ struct Counts {
 /// All times are in **nanoseconds**, recorded by [`perf::Handler`] instrumentation.
 #[derive(serde::Serialize)]
 struct Timings {
-    /// Wall-clock time measured for the top-level `Db::query` call that the
-    /// scenario invoked. Includes memo lookups, bookkeeping, invalidation
-    /// handling triggered by each query, and the `eval` work described below.
+    /// Time spent in the top-level `Snapshot::query` calls that the scenario
+    /// invoked, summed over all snapshots. Includes memo lookups, bookkeeping,
+    /// invalidation handling triggered by each query, and the `eval` work
+    /// described below. Nested calls are not counted twice.
     query: u64,
-    /// Sum of time spent executing `Query::eval` across the whole call tree.
-    /// Because `Query::eval` implementations may recursively call
-    /// `snapshot.query::<...>` (and those queries may themselves call `eval`),
-    /// `eval_time_ns` includes the nested `eval` time in the entire evaluation
-    /// tree. In other words, `eval_time_ns` is the total CPU time spent
-    /// *inside* `eval` implementations.
+    /// Sum of time spent executing `Query::eval` across the whole call tree,
+    /// summed over all snapshots. The time an `eval` implementation spends in
+    /// the `snapshot.query::<...>` calls it makes is excluded: the bookkeeping
+    /// of those calls only counts towards `query`, and nested evaluations are
+    /// counted once, under their own `eval`.
     eval: u64,
 }
 
@@ -1553,24 +1553,24 @@ fn bench_scenario<const WARMUP_COUNT: usize, const N: usize, Inp>(
     ) -> (Timings, Counts) {
         let mut db = Db::default();
         let value = init(&mut db);
-        db.event_handler().reset();
+        let before = db.event_handler().stats();
         bench(&mut db, value);
-        let measurements = db.event_handler();
+        let measurements = db.event_handler().stats().since(before);
         (Timings::new(measurements), Counts::new(measurements))
     }
 }
 
 impl Counts {
-    fn new(measurements: &perf::Handler) -> Self {
+    fn new(measurements: perf::Stats) -> Self {
         Self {
-            query: measurements.query_count(),
-            eval: measurements.eval_count(),
+            query: measurements.queries,
+            eval: measurements.evals,
         }
     }
 }
 
 impl Timings {
-    fn new(measurements: &perf::Handler) -> Self {
+    fn new(measurements: perf::Stats) -> Self {
         Self {
             query: measurements
                 .query_time()
@@ -1578,7 +1578,7 @@ impl Timings {
                 .try_into()
                 .unwrap_or(u64::MAX),
             eval: measurements
-                .eval_time()
+                .eval_time
                 .as_nanos()
                 .try_into()
                 .unwrap_or(u64::MAX),

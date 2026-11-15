@@ -385,7 +385,7 @@ where
     /// let mut db: Db<Storage, perf::Handler> = Db::default();
     /// let width = db.new_input::<Width>(&3);
     /// db.snapshot().query::<Width>(&width);
-    /// assert_eq!(db.event_handler().query_count(), 1);
+    /// assert_eq!(db.event_handler().stats().queries, 1);
     /// ```
     #[must_use]
     pub fn event_handler(&self) -> &H {
@@ -647,7 +647,7 @@ where
     /// let snapshot = db.snapshot();
     /// snapshot.query::<Width>(&width);
     /// snapshot.query::<Width>(&width);
-    /// assert_eq!(snapshot.event_handler().query_count(), 2);
+    /// assert_eq!(snapshot.event_handler().stats().queries, 2);
     /// ```
     #[must_use]
     pub fn event_handler(&self) -> &H {
