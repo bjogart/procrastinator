@@ -248,8 +248,8 @@ where
     /// Receives the payload that [`Handler::enter_scope`] returned when the
     /// scope started. See [`Handler::enter_scope`] for an example.
     ///
-    /// This method also runs while a panic unwinds out of a query. Panicking
-    /// here then aborts the process.
+    /// This method also runs while a panic unwinds. Panicking here then aborts
+    /// the process.
     fn exit_scope(&self, payload: Self::Payload);
 }
 
@@ -366,6 +366,14 @@ where
     /// starts once every [`Snapshot`](crate::Snapshot) has been dropped, so it
     /// does not include the time spent waiting for them.
     SetInput(MemoId<S>),
+    /// A call to [`Db::gc`](crate::Db::gc).
+    ///
+    /// The scope covers the whole collection: transferring inputs, freeing
+    /// values and memos, and deregistering query types. The events for these
+    /// steps fire inside this scope. As with
+    /// [`SetInput`](ScopedEventKind::SetInput), the scope starts once every
+    /// [`Snapshot`](crate::Snapshot) has been dropped.
+    Gc,
 }
 
 /// Enters a scope on creation and exits it when dropped.

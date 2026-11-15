@@ -811,6 +811,7 @@ where
             handler,
             rev: _,
         } = self;
+        let _gc_guard = ScopeGuard::new(handler, ScopedEvent::new(ScopedEventKind::Gc));
         let input_count = inputs.len();
         let mut storage_transfer = storage.transfer();
         let mut memos_transfer = memos.transfer(input_count);

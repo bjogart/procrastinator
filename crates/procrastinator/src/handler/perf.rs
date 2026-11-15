@@ -131,7 +131,7 @@ where
             ScopedEventKind::Eval(_) => {
                 self.eval_count.fetch_add(1, Ordering::Relaxed);
             }
-            ScopedEventKind::SetInput(_) => {}
+            ScopedEventKind::SetInput(_) | ScopedEventKind::Gc => {}
         }
         (event.kind, Instant::now())
     }
@@ -142,7 +142,7 @@ where
         match kind {
             ScopedEventKind::Query(_) => self.query_time.add(elapsed),
             ScopedEventKind::Eval(_) => self.eval_time.add(elapsed),
-            ScopedEventKind::SetInput(_) => {}
+            ScopedEventKind::SetInput(_) | ScopedEventKind::Gc => {}
         }
     }
 }
