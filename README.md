@@ -65,8 +65,6 @@ Proposals are evaluated against the goals of Procrastinator:
 - It stays small.
 - It stays accessible to both users and contributors.
 - It uses no `unsafe` code and no macros in user-facing APIs.
-- It uses no non-local control flow:
-  for example, cancellation does not rely on panics or unwinding.
 
 ## License
 

@@ -287,10 +287,9 @@ Each concept in Procrastinator maps to a familiar construct from regular Rust:
 Procrastinator is not the only crate in this space, or the first.
 Consider this crate if you value a small crate that is easy to learn and easy to understand.
 Queries and inputs are plain trait implementations,
-and it has no code generation at build time.
-Query calls are easily parallelizable,
-cancellation is panic-free,
-and it provides the opportunity for custom storage structs and profiling handlers.
+and there is no code generation at build time.
+Parallelization comes built-in
+and the crate provides the opportunity to define custom storage structs and profiling handlers.
 In exchange, Procrastinator may offer less functionality than the crates below:
 
 - [Salsa](https://github.com/salsa-rs/salsa) is arguably the most popular incremental computation crate in Rust,
@@ -307,7 +306,6 @@ In exchange, Procrastinator may offer less functionality than the crates below:
   constrained memoization of existing functions.
   Attribute macros mark functions to memoize and types to track.
   Consider comemo if you would like to add incrementality to existing code without structuring it around a database.
-
 ## Contributing
 
 Contributions, questions, and pull requests are welcome!
@@ -316,9 +314,7 @@ Proposals are evaluated against the goals of this crate:
 
 - It stays small.
 - It stays accessible to users and contributors alike.
-- It uses no macros in user-facing APIs and no `unsafe` code.
-- It uses no non-local control flow:
-  for example, cancellation does not rely on panics or unwinding.
+- It uses no `unsafe` code and no macros in user-facing APIs.
 
 CI is intentionally strict.
 Among other things, it enables most Clippy lints and treats warnings as errors.
