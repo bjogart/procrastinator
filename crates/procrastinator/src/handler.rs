@@ -32,8 +32,6 @@
 use crate::MemoId;
 use crate::QueryId;
 use crate::storage::Storage;
-use std::thread;
-use std::thread::ThreadId;
 
 pub mod perf;
 
@@ -194,10 +192,9 @@ where
     ///
     /// The returned payload is passed to the [`Handler::exit_scope`] call that
     /// ends this scope. Every scope that is entered is exited exactly once,
-    /// even if a query panics. Scopes on one thread are properly nested, so
-    /// the most recently entered scope on a thread is always the first to
-    /// exit. Scopes on different threads may interleave; use
-    /// [`ScopedEvent::thread_id`] to tell them apart.
+    /// even if a query panics. Scopes on one thread are properly nested, so the
+    /// most recently entered scope on a thread is always the first to exit.
+    /// Scopes on different threads may interleave.
     ///
     /// # Examples
     ///
@@ -261,8 +258,6 @@ pub struct Event<S>
 where
     S: Storage,
 {
-    /// The thread on which the event happened.
-    pub thread_id: ThreadId,
     /// What happened.
     pub kind: EventKind<S>,
 }
@@ -334,8 +329,6 @@ pub struct ScopedEvent<S>
 where
     S: Storage,
 {
-    /// The thread on which the span runs.
-    pub thread_id: ThreadId,
     /// What kind of span this is.
     pub kind: ScopedEventKind<S>,
 }
@@ -421,10 +414,7 @@ where
     /// Constructs a new event.
     #[must_use]
     pub fn new(kind: EventKind<S>) -> Self {
-        Self {
-            thread_id: thread::current().id(),
-            kind,
-        }
+        Self { kind }
     }
 }
 
@@ -435,10 +425,7 @@ where
     /// Constructs a new scoped event.
     #[must_use]
     pub fn new(kind: ScopedEventKind<S>) -> Self {
-        Self {
-            thread_id: thread::current().id(),
-            kind,
-        }
+        Self { kind }
     }
 }
 
