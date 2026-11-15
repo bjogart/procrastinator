@@ -89,7 +89,7 @@ const VALUE_ALREADY_TAKEN: &str = "bug: guard payload already taken";
 ///
 ///     fn event(&self, _event: Event<S>) {}
 ///
-///     fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
+///     fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload {
 ///         if let ScopedEventKind::Query(_) = event.kind {
 ///             self.queries.fetch_add(1, Ordering::Relaxed);
 ///         }
@@ -172,7 +172,7 @@ where
     ///         }
     ///     }
     ///
-    ///     fn enter_scope(&self, _event: ScopedEvent) -> Self::Payload {}
+    ///     fn enter_scope(&self, _event: ScopedEvent<S>) -> Self::Payload {}
     ///
     ///     fn exit_scope(&self, (): Self::Payload) {}
     /// }
@@ -227,10 +227,10 @@ where
     ///
     ///     fn event(&self, _event: Event<S>) {}
     ///
-    ///     fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
+    ///     fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload {
     ///         match event.kind {
     ///             ScopedEventKind::Eval(_) => Some(Instant::now()),
-    ///             ScopedEventKind::Query(_) => None,
+    ///             _ => None,
     ///         }
     ///     }
     ///
@@ -241,7 +241,7 @@ where
     ///     }
     /// }
     /// ```
-    fn enter_scope(&self, event: ScopedEvent) -> Self::Payload;
+    fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload;
 
     /// Called when a [`ScopedEvent`] ends.
     ///
@@ -330,16 +330,22 @@ where
 /// Passed to [`Handler::enter_scope`] when the span starts. See there for an
 /// example.
 #[derive(Clone, Copy, Debug)]
-pub struct ScopedEvent {
+pub struct ScopedEvent<S>
+where
+    S: Storage,
+{
     /// The thread on which the span runs.
     pub thread_id: ThreadId,
     /// What kind of span this is.
-    pub kind: ScopedEventKind,
+    pub kind: ScopedEventKind<S>,
 }
 
 /// The kinds of [`ScopedEvent`].
 #[derive(Clone, Copy, Debug)]
-pub enum ScopedEventKind {
+pub enum ScopedEventKind<S>
+where
+    S: Storage,
+{
     /// A call to [`Snapshot::query`](crate::Snapshot::query).
     ///
     /// The scope covers the whole call: checking whether the memoized output is
@@ -350,6 +356,13 @@ pub enum ScopedEventKind {
     /// This scope is always nested inside a [`ScopedEventKind::Query`] scope,
     /// and it is only entered if the memoized output could not be reused.
     Eval(QueryId),
+    /// A call to [`Db::set_input`](crate::Db::set_input) for the input whose
+    /// memo has this ID.
+    ///
+    /// The scope covers storing the new value and updating the input's memo. It
+    /// starts once every [`Snapshot`](crate::Snapshot) has been dropped, so it
+    /// does not include the time spent waiting for them.
+    SetInput(MemoId<S>),
 }
 
 /// Enters a scope on creation and exits it when dropped.
@@ -374,7 +387,7 @@ where
 
     fn event(&self, _: Event<S>) {}
 
-    fn enter_scope(&self, _: ScopedEvent) -> Self::Payload {}
+    fn enter_scope(&self, _: ScopedEvent<S>) -> Self::Payload {}
 
     fn exit_scope(&self, (): Self::Payload) {}
 }
@@ -393,10 +406,13 @@ where
     }
 }
 
-impl ScopedEvent {
+impl<S> ScopedEvent<S>
+where
+    S: Storage,
+{
     /// Constructs a new scoped event.
     #[must_use]
-    pub fn new(kind: ScopedEventKind) -> Self {
+    pub fn new(kind: ScopedEventKind<S>) -> Self {
         Self {
             thread_id: thread::current().id(),
             kind,
@@ -409,7 +425,7 @@ where
     S: Storage,
     H: Handler<S>,
 {
-    pub(crate) fn new(handler: &'handler H, event: ScopedEvent) -> Self {
+    pub(crate) fn new(handler: &'handler H, event: ScopedEvent<S>) -> Self {
         Self {
             handler,
             payload: Some(handler.enter_scope(event)),

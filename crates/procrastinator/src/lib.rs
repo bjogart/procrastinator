@@ -245,7 +245,7 @@ where
 ///         }
 ///     }
 ///
-///     fn enter_scope(&self, _event: ScopedEvent) -> Self::Payload {}
+///     fn enter_scope(&self, _event: ScopedEvent<default::Storage>) -> Self::Payload {}
 ///
 ///     fn exit_scope(&self, (): Self::Payload) {}
 /// }
@@ -443,10 +443,10 @@ where
 
     /// Replaces the value of an input with another value.
     ///
-    /// Queries that depend on the input, directly or through other queries,
-    /// are re-evaluated the next time they are called. Nothing is evaluated
-    /// right away. If the new value is equal to the current one, all memoized
-    /// results stay valid.
+    /// Queries that depend on the input, directly or through other queries, are
+    /// re-evaluated the next time they are called. Nothing is evaluated right
+    /// away. If the new value is equal to the current one, all memoized results
+    /// stay valid.
     ///
     /// # Examples
     ///
@@ -470,15 +470,16 @@ where
     /// # Blocking
     ///
     /// This method blocks until every [`Snapshot`] of this database has been
-    /// dropped. Calling it while the current thread holds a snapshot
-    /// deadlocks.
+    /// dropped. Calling it while the current thread holds a snapshot deadlocks.
     ///
     /// # Panics
     ///
     /// Panics if the [`Clone`], [`Eq`], or [`Hash`] implementation of the
-    /// value, or the event handler panics. The panic propagates to the
-    /// caller, and the database stays usable: the input keeps its previous
-    /// value.
+    /// value, or the event handler panics. The panic propagates to the caller,
+    /// and the database stays usable: the input keeps its previous value. The
+    /// exception is a panic in [`Handler::exit_scope`] for the
+    /// [`ScopedEventKind::SetInput`] scope, which happens after the new value
+    /// was set.
     ///
     /// Passing an `input_id` that was created by a different `Db` is a logic
     /// error. It may panic now, panic later, or silently change an unrelated
@@ -490,6 +491,10 @@ where
     {
         let runtime = self.runtime.wait_exclusive();
         let memo_id = self.inputs.memo_id(input_id);
+        let _set_input_guard = ScopeGuard::new(
+            &runtime.handler,
+            ScopedEvent::new(ScopedEventKind::SetInput(memo_id)),
+        );
         let new_value_id = runtime.storage.store(&runtime.handler, value);
         if runtime.memos.value_id(memo_id) != Some(new_value_id) {
             let current_rev = runtime.rev.bump();

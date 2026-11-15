@@ -97,7 +97,7 @@ impl<S> HandlerTrait<S> for Handler
 where
     S: Storage,
 {
-    type Payload = (ScopedEventKind, Instant);
+    type Payload = (ScopedEventKind<S>, Instant);
 
     fn event(&self, event: Event<S>) {
         match event.kind {
@@ -123,11 +123,16 @@ where
         }
     }
 
-    fn enter_scope(&self, event: ScopedEvent) -> Self::Payload {
+    fn enter_scope(&self, event: ScopedEvent<S>) -> Self::Payload {
         match event.kind {
-            ScopedEventKind::Query(_) => self.query_count.fetch_add(1, Ordering::Relaxed),
-            ScopedEventKind::Eval(_) => self.eval_count.fetch_add(1, Ordering::Relaxed),
-        };
+            ScopedEventKind::Query(_) => {
+                self.query_count.fetch_add(1, Ordering::Relaxed);
+            }
+            ScopedEventKind::Eval(_) => {
+                self.eval_count.fetch_add(1, Ordering::Relaxed);
+            }
+            ScopedEventKind::SetInput(_) => {}
+        }
         (event.kind, Instant::now())
     }
 
@@ -137,6 +142,7 @@ where
         match kind {
             ScopedEventKind::Query(_) => self.query_time.add(elapsed),
             ScopedEventKind::Eval(_) => self.eval_time.add(elapsed),
+            ScopedEventKind::SetInput(_) => {}
         }
     }
 }
