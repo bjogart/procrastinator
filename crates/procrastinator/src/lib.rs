@@ -110,6 +110,7 @@ where
     runtime: Shared<Runtime<S, H>>,
     inputs: InputRegistry<S, H>,
     handler: Arc<H>,
+    handler_local: H::Local,
 }
 
 /// A read-only view of a [`Db`], used to run queries.
@@ -431,7 +432,6 @@ where
     /// and the database stays usable.
     pub fn new_input<I>(&mut self, value: &I::Value) -> InputId<I>
     where
-        H: Handler<S>,
         I: Input,
     {
         let rev = self.runtime.rev.get();
@@ -493,20 +493,18 @@ where
     /// input.
     pub fn set_input<I>(&mut self, input_id: InputId<I>, value: &I::Value)
     where
-        H: Handler<S>,
         I: Input,
     {
         let memo_id = self.inputs.memo_id(input_id);
-        let handler_local = H::Local::default();
         let _set_input_guard = ScopeGuard::new(
             &*self.handler,
-            &handler_local,
+            &self.handler_local,
             ScopedEvent::new(ScopedEventKind::SetInput(memo_id)),
         );
         let runtime = {
             let _wait_guard = ScopeGuard::new(
                 &*self.handler,
-                &handler_local,
+                &self.handler_local,
                 ScopedEvent::new(ScopedEventKind::WaitExclusive),
             );
             self.runtime.wait_exclusive()
@@ -573,20 +571,16 @@ where
     /// Panics if the [`Eq`] or [`Hash`] implementation of a stored value, the
     /// [`Drop`] implementation of a freed value, or the event handler panics.
     /// The panic propagates to the caller, and the database stays usable.
-    pub fn gc(&mut self)
-    where
-        H: Handler<S>,
-    {
-        let handler_local = H::Local::default();
+    pub fn gc(&mut self) {
         let _gc_guard = ScopeGuard::new(
             &*self.handler,
-            &handler_local,
+            &self.handler_local,
             ScopedEvent::new(ScopedEventKind::Gc),
         );
         let runtime = {
             let _wait_guard = ScopeGuard::new(
                 &*self.handler,
-                &handler_local,
+                &self.handler_local,
                 ScopedEvent::new(ScopedEventKind::WaitExclusive),
             );
             self.runtime.wait_exclusive()
@@ -605,6 +599,7 @@ where
             runtime: Shared::default(),
             inputs: InputRegistry::default(),
             handler: Arc::default(),
+            handler_local: H::Local::default(),
         }
     }
 }
@@ -720,7 +715,6 @@ where
     /// error. It may panic, or return the value of an unrelated input.
     pub fn query<Q>(&self, args: &Q::Args) -> <S::Handle as Handle>::TypedHandle<Q::Out>
     where
-        H: Handler<S>,
         Q: Query,
     {
         let query_id = QueryId::of::<Q>();
@@ -743,10 +737,7 @@ where
         Handle::downcast::<Q::Out>(self.runtime.storage.get(value_id))
     }
 
-    fn verify_memo(&self, current_rev: Revision, memo_id: MemoId<S>)
-    where
-        H: Handler<S>,
-    {
+    fn verify_memo(&self, current_rev: Revision, memo_id: MemoId<S>) {
         let (last_verified, deps) = {
             let (last_verified, deps) = self.runtime.memos.verification(memo_id);
             // If this rev is up to date, skip it.
@@ -765,10 +756,7 @@ where
         self.eval_memo(current_rev, memo_id)
     }
 
-    fn eval_memo(&self, current_rev: Revision, memo_id: MemoId<S>)
-    where
-        H: Handler<S>,
-    {
+    fn eval_memo(&self, current_rev: Revision, memo_id: MemoId<S>) {
         let ops = self
             .runtime
             .query_ops
@@ -797,18 +785,12 @@ where
         current_rev: Revision,
         memo_last_verified: Revision,
         dep: MemoId<S>,
-    ) -> bool
-    where
-        H: Handler<S>,
-    {
+    ) -> bool {
         self.verify_memo(current_rev, dep);
         self.runtime.memos.last_changed(dep) > memo_last_verified
     }
 
-    fn install_query(&self) -> QueryUpdate<'_, S, H>
-    where
-        H: Handler<S>,
-    {
+    fn install_query(&self) -> QueryUpdate<'_, S, H> {
         let mut active_queries = self.active_queries.borrow_mut();
         let ActiveQueryStack(active_queries) = &mut *active_queries;
         active_queries.push(ActiveQuery::default());
