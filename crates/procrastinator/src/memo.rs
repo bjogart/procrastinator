@@ -8,6 +8,7 @@ use crate::handler::Handler;
 use crate::storage::Storage;
 use core::fmt::Debug;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::sync::RwLock;
 use std::sync::RwLockReadGuard;
@@ -27,6 +28,7 @@ where
 {
     curr: RwLockReadGuard<'memos, MemoMap<S>>,
     next: MemoMap<S>,
+    transferred_ids: HashSet<MemoId<S>>,
 }
 
 type MemoMap<S> = HashMap<MemoId<S>, RwLock<MemoEntry<S>>>;
@@ -172,14 +174,11 @@ where
         memo.value_id = Some(value_id);
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.0.read().expect(INCONSISTENT_STATE).len()
-    }
-
     pub(crate) fn transfer(&self, capacity: usize) -> MemosTransfer<'_, S> {
         MemosTransfer {
             curr: self.0.read().expect(INCONSISTENT_STATE),
             next: HashMap::with_capacity(capacity),
+            transferred_ids: HashSet::with_capacity(capacity),
         }
     }
 }
@@ -188,7 +187,7 @@ impl<S> MemosTransfer<'_, S>
 where
     S: Storage,
 {
-    pub(crate) fn retain<F>(&mut self, memo_id: MemoId<S>, transfer: F) -> MemoId<S>
+    pub(crate) fn transfer<F>(&mut self, memo_id: MemoId<S>, transfer: F) -> MemoId<S>
     where
         F: FnOnce(S::Id) -> (MemoId<S>, S::Id),
     {
@@ -212,6 +211,7 @@ where
             (*last_verified, *last_changed, value_id)
         };
         let (next_memo_id, next_value_id) = transfer(value_id);
+        self.transferred_ids.insert(memo_id);
         self.next.insert(
             next_memo_id,
             RwLock::new(MemoEntry {
@@ -224,11 +224,20 @@ where
         next_memo_id
     }
 
-    pub(crate) fn into_memos(self) -> Memos<S> {
-        let next = {
-            let Self { next, curr: _curr } = self;
-            next
-        };
+    pub(crate) fn into_memos<H>(self, handler: &H) -> Memos<S>
+    where
+        H: Handler<S>,
+    {
+        let Self {
+            curr,
+            next,
+            transferred_ids,
+        } = self;
+        for &memo_id in curr.keys() {
+            if !transferred_ids.contains(&memo_id) {
+                handler.event(Event::new(EventKind::DeregisterMemo(memo_id)));
+            }
+        }
         Memos(RwLock::new(next))
     }
 }

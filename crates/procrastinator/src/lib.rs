@@ -2,7 +2,6 @@
 
 extern crate alloc;
 
-use crate::handler::Event;
 use crate::handler::Handler;
 use crate::handler::ScopeGuard;
 use crate::handler::ScopedEvent;
@@ -814,24 +813,20 @@ where
         let next_inputs = inputs.transfer(|input| {
             let memo_id = input.memo_id();
             input_queries.insert(memo_id.query_id);
-            memos_transfer.retain(memo_id, |value_id| {
+            memos_transfer.transfer(memo_id, |value_id| {
                 input.transfer(handler, &mut storage_transfer, value_id)
             })
         });
-        let next_memos = memos_transfer.into_memos();
+        let next_memos = memos_transfer.into_memos(handler);
         let next_storage = storage_transfer.into_storage(handler);
 
-        let prev_memos = {
+        {
             // Replace everything first before dropping collected values, since
             // Drop implementations can panic.
             let _prev_inputs = mem::replace(inputs, next_inputs);
             let _prev_storage = mem::replace(storage, next_storage);
-            mem::replace(memos, next_memos)
-        };
-
-        handler.event(Event::new(handler::EventKind::DeregisterMemos(
-            prev_memos.len().saturating_sub(memos.len()),
-        )));
+            let _prev_memos = mem::replace(memos, next_memos);
+        }
         query_ops.retain(handler, |query_id| input_queries.contains(&query_id));
     }
 }

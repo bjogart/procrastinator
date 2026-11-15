@@ -117,8 +117,8 @@ where
             EventKind::RegisterMemo(_) => {
                 self.memo_count.fetch_add(1, Ordering::Relaxed);
             }
-            EventKind::DeregisterMemos(n) => {
-                self.memo_count.fetch_sub(n, Ordering::Relaxed);
+            EventKind::DeregisterMemo(_) => {
+                self.memo_count.fetch_sub(1, Ordering::Relaxed);
             }
         }
     }

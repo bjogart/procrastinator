@@ -165,8 +165,8 @@ where
     ///             EventKind::RegisterMemo(_) => {
     ///                 self.memos.fetch_add(1, Ordering::Relaxed);
     ///             }
-    ///             EventKind::DeregisterMemos(count) => {
-    ///                 self.memos.fetch_sub(count, Ordering::Relaxed);
+    ///             EventKind::DeregisterMemo(_) => {
+    ///                 self.memos.fetch_sub(1, Ordering::Relaxed);
     ///             }
     ///             _ => {}
     ///         }
@@ -307,8 +307,12 @@ where
     /// A memo holds the memoized output of one query for one set of arguments.
     /// Every input also has a memo, which holds its value.
     RegisterMemo(MemoId<S>),
-    /// [`Db::gc`](crate::Db::gc) removed this many memos.
-    DeregisterMemos(usize),
+    /// [`Db::gc`](crate::Db::gc) removed a memo.
+    ///
+    /// Garbage collection keeps only the memos of inputs. The ID of a kept memo
+    /// may change as its arguments move to a new storage ID (see [`MemoId`]),
+    /// but this is not a removal and does not trigger this event.
+    DeregisterMemo(MemoId<S>),
 }
 
 /// Something that spans a period of time.
